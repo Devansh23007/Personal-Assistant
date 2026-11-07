@@ -9,6 +9,8 @@ venv/
 node_modules/
 dist/
 *.tsbuildinfo
+.vite/
+frontend/.vite/
 
 # Local configuration and tooling
 .env
