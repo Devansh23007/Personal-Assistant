@@ -6,6 +6,12 @@ import json
 from sqlalchemy.orm import Session
 
 from app.modules.auth.models import User
+from app.modules.autoflow.service import (
+    execute_workflow as autoflow_execute,
+    get_morning_briefing as autoflow_get_briefing,
+    list_workflows as autoflow_list,
+    seed_demo_workflows_if_empty as autoflow_seed_demo,
+)
 from app.modules.docuvault.service import (
     search_documents_rag as docuvault_search_rag,
     seed_demo_documents_if_empty as docuvault_seed_demo,
@@ -442,6 +448,59 @@ def _search_product_prices(arguments: dict[str, object], context: ToolContext) -
     return "\n".join(lines)
 
 
+# --- AutoFlow Tools ---
+def _get_morning_briefing(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    autoflow_seed_demo(context.db, context.user.id)
+    briefing = autoflow_get_briefing(context.db, context.user.id)
+    return briefing.summary_markdown
+
+
+def _list_workflows(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    autoflow_seed_demo(context.db, context.user.id)
+    workflows = autoflow_list(context.db, context.user.id)
+    if not workflows:
+        return "No workflows configured in AutoFlow."
+
+    lines = [f"Configured Workflows ({len(workflows)}):"]
+    for w in workflows:
+        status = "Active" if w.is_active else "Inactive"
+        sched = f" [{w.schedule_cron}]" if w.schedule_cron else ""
+        lines.append(f"- ID {w.id}: {w.name} ({w.trigger_type}{sched}) — {status}")
+    return "\n".join(lines)
+
+
+def _trigger_workflow(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    autoflow_seed_demo(context.db, context.user.id)
+    workflows = autoflow_list(context.db, context.user.id)
+    target = None
+
+    wf_id = arguments.get("workflow_id")
+    if wf_id is not None:
+        try:
+            target_id = int(wf_id)  # type: ignore[arg-type]
+            target = next((w for w in workflows if w.id == target_id), None)
+        except (ValueError, TypeError):
+            pass
+
+    if not target:
+        wf_name = str(arguments.get("workflow_name", "")).strip().lower()
+        if wf_name:
+            target = next((w for w in workflows if wf_name in w.name.lower()), None)
+
+    if not target:
+        return "Workflow not found. Available: " + ", ".join(w.name for w in workflows)
+
+    run = autoflow_execute(context.db, context.user.id, target.id, triggered_by="assistant")
+    approval_notice = " (Awaiting your approval in dashboard)" if run.requires_approval else ""
+    return f"Triggered workflow '{target.name}'. Status: {run.status}{approval_notice}.\nSummary: {run.results_summary}"
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -706,6 +765,37 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_morning_briefing",
+            "description": "Get a consolidated executive daily briefing combining LifeOS tasks, InboxZero emails, MealMind dinners, and SpendWise budget alerts.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workflows",
+            "description": "List all configured cross-module automations and scheduled workflows in AutoFlow.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "trigger_workflow",
+            "description": "Run a cross-module workflow in AutoFlow by name or ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_name": {"type": "string", "description": "Name or keyword of the workflow to run"},
+                    "workflow_id": {"type": "integer", "description": "Optional workflow ID"},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -727,6 +817,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_grocery_list": _get_grocery_list,
     "add_grocery_item": _add_grocery_item,
     "search_product_prices": _search_product_prices,
+    "get_morning_briefing": _get_morning_briefing,
+    "list_workflows": _list_workflows,
+    "trigger_workflow": _trigger_workflow,
 }
 
 

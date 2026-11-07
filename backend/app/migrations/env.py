@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from app.core.config import settings
 from app.core.database import Base
 from app.modules.auth import models as auth_models  # noqa: F401
+from app.modules.autoflow import models as autoflow_models  # noqa: F401
 from app.modules.docuvault import models as docuvault_models  # noqa: F401
 from app.modules.inboxzero import models as inboxzero_models  # noqa: F401
 from app.modules.learnloop import models as learnloop_models  # noqa: F401

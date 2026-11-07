@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { AutoFlowView } from "./AutoFlowView";
 import { DocuVaultView } from "./DocuVaultView";
 import { InboxZeroView } from "./InboxZeroView";
 import { LearnLoopView } from "./LearnLoopView";
@@ -15,7 +16,7 @@ const modules = [
   { name: "DocuVault", detail: "Your documents", icon: "▱", available: true },
   { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: true },
   { name: "PricePilot", detail: "Shopping research", icon: "◇", available: true },
-  { name: "AutoFlow", detail: "Connected workflows", icon: "⤳", available: false },
+  { name: "AutoFlow", detail: "Connected workflows", icon: "⤳", available: true },
 ];
 
 type User = { id: number; email: string };
@@ -285,6 +286,8 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
           />
         ) : activeView === "pricepilot" ? (
           <PricePilotView token={token} initialSearchQuery={selectedPriceQuery} />
+        ) : activeView === "autoflow" ? (
+          <AutoFlowView token={token} />
         ) : (
           <>
             <section className="welcome">

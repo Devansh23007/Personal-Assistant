@@ -319,3 +319,54 @@
 .catalog-table th{background:#f8fbf7;padding:10px 14px;color:#677a69;border-bottom:1px solid #e5ebe2;text-align:left}
 .catalog-table td{padding:11px 14px;border-bottom:1px solid #f1f5ee;color:#354536}
 .tag-simple{background:#edf3eb;color:#3a6147;font-size:10px;padding:2px 6px;border-radius:4px;text-transform:uppercase}
+
+/* AutoFlow Styles */
+.autoflow-view{margin-top:28px}
+.briefing-container{background:#fff;border:1px solid #e9ece6;border-radius:14px;padding:22px;margin-bottom:28px}
+.briefing-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;flex-wrap:wrap;gap:12px}
+.briefing-tag{font-size:9px;font-weight:700;letter-spacing:1px;color:#2f6841;background:#edf5ee;padding:3px 8px;border-radius:6px;text-transform:uppercase}
+.briefing-header h3{margin:8px 0 4px;font-size:20px;color:#28382d}
+.briefing-headline{margin:0;font-size:12px;color:#6b7c6c}
+.briefing-metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.brief-card{background:#f9fbf8;border:1px solid #e7ede4;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:12px}
+.brief-icon{font-size:22px}
+.brief-card strong{display:block;font-size:13px;color:#28382d}
+.brief-card small{font-size:10px;color:#7e8d7f}
+.briefing-markdown-box{background:#fbfcf9;border:1px solid #e7ede4;border-radius:10px;padding:16px}
+.briefing-text{font-family:inherit;font-size:12px;color:#344435;line-height:1.65;white-space:pre-wrap;margin:0}
+.add-workflow-form{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:20px;margin-bottom:24px}
+.add-workflow-form h3{margin:0 0 16px;font-size:15px;color:#28382d}
+.workflows-section{margin-bottom:28px}
+.workflows-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.workflow-card{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.workflow-card.disabled{opacity:0.65}
+.wf-top{display:flex;gap:10px;align-items:flex-start}
+.wf-icon{font-size:22px}
+.wf-info{flex:1;min-width:0}
+.wf-info h4{margin:0 0 4px;font-size:14px;color:#28382d}
+.wf-trigger-badge{font-size:9px;color:#788677;background:#f3f6f1;padding:2px 6px;border-radius:4px}
+.toggle-btn{border:none;border-radius:14px;padding:3px 10px;font-size:10px;font-weight:700;cursor:pointer}
+.toggle-btn.on{background:#daf0e1;color:#1e6c38}
+.toggle-btn.off{background:#f0f2ef;color:#7c877a}
+.wf-desc{margin:0;font-size:11px;color:#677668;line-height:1.5}
+.wf-actions{margin-top:auto;padding-top:10px;border-top:1px solid #f2f5f0}
+.runs-history-section{background:#fff;border:1px solid #e9ece6;border-radius:14px;padding:22px;margin-bottom:28px}
+.runs-list{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.run-card{background:#fcfdfa;border:1px solid #e7ede4;border-radius:10px;padding:14px 18px}
+.run-card.approval-required{border:2px solid #e3a84b;background:#fffbf5}
+.run-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.run-title-col strong{font-size:13px;color:#28382d}
+.run-timestamp{display:block;font-size:10px;color:#859484;margin-top:2px}
+.run-status-badge{font-size:9px;font-weight:700;letter-spacing:.6px;padding:3px 8px;border-radius:4px}
+.run-status-badge.status-completed{background:#daf0e1;color:#1e6c38}
+.run-status-badge.status-pending_approval{background:#fff2dc;color:#a05d12}
+.run-status-badge.status-rejected{background:#fde8e5;color:#aa392c}
+.run-summary{margin:0;font-size:12px;color:#455646;line-height:1.55}
+.approval-gate-banner{margin-top:12px;background:#fff;border:1px dashed #d89f41;border-radius:8px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.approval-copy strong{display:block;font-size:12px;color:#8b5614}
+.approval-copy span{font-size:11px;color:#6d604e}
+.approval-buttons{display:flex;gap:8px}
+.btn-approve{background:#2c673e;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer}
+.btn-approve:hover{background:#235231}
+.btn-reject{background:#fff0ed;color:#b23b2c;border:1px solid #f2cfca;border-radius:6px;padding:6px 12px;font-size:11px;cursor:pointer}
+.btn-reject:hover{background:#fbdcd6}

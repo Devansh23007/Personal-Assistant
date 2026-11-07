@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.modules.assistant.router import router as assistant_router
 from app.modules.auth.router import router as auth_router
+from app.modules.autoflow.router import router as autoflow_router
 from app.modules.docuvault.router import router as docuvault_router
 from app.modules.health.router import router as health_router
 from app.modules.inboxzero.router import router as inboxzero_router
@@ -22,3 +23,4 @@ api_router.include_router(docuvault_router)
 api_router.include_router(learnloop_router)
 api_router.include_router(mealmind_router)
 api_router.include_router(pricepilot_router)
+api_router.include_router(autoflow_router)

@@ -149,6 +149,16 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | POST | `/api/pricepilot/prices` | Record new product store price |
 | GET | `/api/pricepilot/compare` | Compare grocery item prices across stores (`q=...`) |
 | POST | `/api/pricepilot/basket-analysis` | Smart grocery basket optimization across stores |
+| GET | `/api/autoflow/workflows` | List connected automations and workflows |
+| POST | `/api/autoflow/workflows` | Create custom automation |
+| GET | `/api/autoflow/workflows/{id}` | Single workflow details |
+| PATCH | `/api/autoflow/workflows/{id}` | Enable/disable or edit workflow |
+| DELETE | `/api/autoflow/workflows/{id}` | Remove workflow |
+| POST | `/api/autoflow/workflows/{id}/run` | Execute workflow across modules |
+| GET | `/api/autoflow/runs` | Execution audit log and approval gate history |
+| POST | `/api/autoflow/runs/{id}/approve` | Human approval gate: authorize run |
+| POST | `/api/autoflow/runs/{id}/reject` | Human approval gate: reject run |
+| GET | `/api/autoflow/briefing` | Consolidated daily executive morning briefing |
 
 ## Foundation scope and safety
 
