@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local configuration and tooling
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
