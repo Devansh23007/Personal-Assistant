@@ -61,3 +61,51 @@
 .task-delete-btn{border:0;background:transparent;color:#b0b8ad;font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px}
 .task-delete-btn:hover{color:#b73f32;background:#fdf0ed}
 @media(max-width:900px){.lifeos-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.form-row{flex-direction:column;align-items:stretch}.filter-search-input{width:100%}}
+
+/* InboxZero Module Styles */
+.inbox-container{margin-top:28px}
+.inbox-split-layout{display:grid;grid-template-columns:380px 1fr;gap:18px;min-height:540px;margin-bottom:28px}
+.inbox-message-list{display:flex;flex-direction:column;gap:8px;max-height:680px;overflow-y:auto;padding-right:4px}
+.inbox-item{background:#fff;border:1px solid #e9ece6;border-radius:10px;padding:13px 15px;cursor:pointer;display:flex;flex-direction:column;gap:5px;transition:all .15s ease}
+.inbox-item:hover{border-color:#c8d4c6}
+.inbox-item.selected{border-color:#487458;background:#fcfdfa;box-shadow:0 2px 8px rgba(49,95,72,.07)}
+.inbox-item.unread{border-left:3px solid #315f48}
+.inbox-item-top{display:flex;justify-content:space-between;align-items:center}
+.sender-row{display:flex;align-items:center;gap:6px}
+.unread-dot{width:7px;height:7px;border-radius:50%;background:#315f48}
+.inbox-sender{font-size:12px;color:#283529}
+.inbox-date{font-size:10px;color:#8d978b}
+.inbox-subject{font-size:12px;font-weight:600;color:#2b372c;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.category-tag{align-self:flex-start;font-size:8px;font-weight:700;letter-spacing:.6px;padding:2px 6px;border-radius:4px;text-transform:uppercase}
+.cat-action_needed{background:#feece8;color:#b23525}
+.cat-primary{background:#edf4ec;color:#35634b}
+.cat-receipts{background:#eaf2f5;color:#2d6980}
+.cat-newsletters{background:#f4edf7;color:#6b3b85}
+.cat-updates{background:#f5f3ec;color:#7e6a27}
+.ai-summary-snippet{margin-top:3px;padding:6px 8px;background:#f5f7f2;border-radius:6px;font-size:10px;color:#526153;line-height:1.4}
+.ai-sparkle{color:#315f48;font-weight:bold}
+.inbox-reading-pane{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:24px 28px;display:flex;flex-direction:column}
+.empty-reading-pane{height:100%;display:grid;place-items:center;color:#8e998c;font-size:12px}
+.reading-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #edf0ea;padding-bottom:16px;margin-bottom:16px}
+.reading-header h2{font-family:Manrope,sans-serif;font-size:18px;color:#233024;margin:8px 0 4px;line-height:1.3}
+.reading-meta{font-size:11px;color:#737f71;margin:0}
+.reading-actions{display:flex;gap:8px;align-items:center}
+.reading-action-btn{border:1px solid #dfe5dc;background:#fdfefc;color:#495648;padding:6px 10px;border-radius:7px;font-size:11px;cursor:pointer}
+.reading-action-btn:hover{background:#f1f4ee}
+.reading-ai-summary-box{background:#f1f6ef;border:1px solid #dbe6d7;border-radius:9px;padding:12px 14px;margin-bottom:20px}
+.reading-ai-summary-box strong{font-size:11px;color:#315f48;display:block;margin-bottom:4px}
+.reading-ai-summary-box p{margin:0;font-size:12px;color:#3c4e3e;line-height:1.55}
+.reading-body pre{font-family:inherit;font-size:12px;color:#303a2f;line-height:1.65;white-space:pre-wrap;margin:0}
+.inbox-drafts-list{display:flex;flex-direction:column;gap:12px;margin-bottom:28px}
+.draft-card{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:18px 22px}
+.draft-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.draft-status-pill{font-size:9px;font-weight:700;letter-spacing:.6px;padding:2px 7px;border-radius:4px;text-transform:uppercase}
+.status-awaiting_approval{background:#fff4e5;color:#9b5a14}
+.status-sent{background:#e7f5ec;color:#276b3f}
+.status-draft{background:#f0f2ef;color:#6b776a}
+.draft-subject{font-family:Manrope,sans-serif;font-size:15px;color:#283729;margin:6px 0 3px}
+.draft-meta{font-size:11px;color:#798577;margin:0}
+.draft-actions{display:flex;align-items:center;gap:8px}
+.sent-timestamp{font-size:11px;color:#3b724f;font-weight:600}
+.draft-body-preview{background:#fcfdfa;border:1px solid #edf1eb;border-radius:8px;padding:12px 14px;font-size:12px;color:#394438;line-height:1.6;white-space:pre-wrap}
+@media(max-width:960px){.inbox-split-layout{grid-template-columns:1fr}}

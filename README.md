@@ -100,6 +100,15 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | GET | `/api/lifeos/tasks/{id}` | Retrieve a specific task |
 | PATCH | `/api/lifeos/tasks/{id}` | Update task details or toggle status |
 | DELETE | `/api/lifeos/tasks/{id}` | Delete a task |
+| GET | `/api/inboxzero/stats` | Inbox metrics (unread, action needed, drafts pending) |
+| GET | `/api/inboxzero/messages` | List emails filtered by category, read status, and search |
+| GET | `/api/inboxzero/messages/{id}` | Retrieve single email message with AI summary |
+| PATCH | `/api/inboxzero/messages/{id}` | Mark read/unread, archive, or re-categorize |
+| POST | `/api/inboxzero/messages/{id}/draft-reply` | Generate an AI contextual reply draft |
+| GET | `/api/inboxzero/drafts` | List pending and sent drafts |
+| POST | `/api/inboxzero/drafts` | Create manual draft |
+| POST | `/api/inboxzero/drafts/{id}/send` | Explicit human approval gate: send draft |
+| DELETE | `/api/inboxzero/drafts/{id}` | Discard a draft |
 
 ## Foundation scope and safety
 

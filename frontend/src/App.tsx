@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
+import { InboxZeroView } from "./InboxZeroView";
 import { LifeOSView } from "./LifeOSView";
 
 const modules = [
   { name: "LifeOS", detail: "Tasks and planning", icon: "◷", available: true },
+  { name: "InboxZero", detail: "Email summaries & triage", icon: "✉", available: true },
   { name: "SpendWise", detail: "Expenses and budgets", icon: "₹", available: false },
-  { name: "InboxZero", detail: "Email summaries", icon: "✉", available: false },
   { name: "LearnLoop", detail: "Study and revision", icon: "▤", available: false },
   { name: "DocuVault", detail: "Your documents", icon: "▱", available: false },
   { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: false },
@@ -253,6 +254,8 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
         {/* View Switching */}
         {activeView === "lifeos" ? (
           <LifeOSView token={token} />
+        ) : activeView === "inboxzero" ? (
+          <InboxZeroView token={token} />
         ) : (
           <>
             <section className="welcome">
@@ -320,19 +323,19 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
               aria-label="Message your assistant"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="What would you like help with? (e.g. 'What tasks are pending?' or 'Create a task...')"
+              placeholder="What would you like help with? (e.g. 'Summarize my inbox', 'Add task: review deck', 'Search emails')..."
               maxLength={8000}
             />
             <button disabled={sending || !prompt.trim()} aria-label="Send message">{sending ? "…" : "Send ↗"}</button>
           </form>
           <p className="chat-footnote">
-            When configured with an LLM key, the assistant can query and manage your LifeOS tasks in real time via registered tools.
+            When configured with an LLM key, the assistant can query/manage LifeOS tasks and summarize/draft emails in InboxZero. Sending emails requires manual user approval.
           </p>
         </section>
 
         <footer>
           <span>PERSONAL ASSISTANT <i>·</i> YOUR SPACE, AT YOUR PACE</span>
-          <span>LIFEOS ACTIVE</span>
+          <span>PHASE 3: INBOXZERO ACTIVE</span>
         </footer>
       </main>
     </div>
