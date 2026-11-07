@@ -94,6 +94,12 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | POST | `/api/auth/token` | Exchange email/password for a bearer token |
 | GET | `/api/auth/me` | Return the signed-in account |
 | POST | `/api/assistant/chat` | Authenticated chat with bounded tool calling |
+| GET | `/api/lifeos/tasks` | List user tasks with status, priority, and keyword filters |
+| POST | `/api/lifeos/tasks` | Create a task with priority, due date, timezone, and tags |
+| GET | `/api/lifeos/tasks/summary` | Task counts and metrics (overdue, today, pending) |
+| GET | `/api/lifeos/tasks/{id}` | Retrieve a specific task |
+| PATCH | `/api/lifeos/tasks/{id}` | Update task details or toggle status |
+| DELETE | `/api/lifeos/tasks/{id}` | Delete a task |
 
 ## Foundation scope and safety
 

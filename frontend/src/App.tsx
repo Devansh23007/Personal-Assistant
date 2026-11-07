@@ -1,14 +1,15 @@
 import { FormEvent, useEffect, useState } from "react";
+import { LifeOSView } from "./LifeOSView";
 
 const modules = [
-  { name: "LifeOS", detail: "Tasks and planning", icon: "◷", active: true },
-  { name: "SpendWise", detail: "Expenses and budgets", icon: "₹" },
-  { name: "InboxZero", detail: "Email summaries", icon: "✉" },
-  { name: "LearnLoop", detail: "Study and revision", icon: "▤" },
-  { name: "DocuVault", detail: "Your documents", icon: "▱" },
-  { name: "MealMind", detail: "Meals and groceries", icon: "⌂" },
-  { name: "PricePilot", detail: "Shopping research", icon: "◇" },
-  { name: "AutoFlow", detail: "Connected workflows", icon: "⤳" },
+  { name: "LifeOS", detail: "Tasks and planning", icon: "◷", available: true },
+  { name: "SpendWise", detail: "Expenses and budgets", icon: "₹", available: false },
+  { name: "InboxZero", detail: "Email summaries", icon: "✉", available: false },
+  { name: "LearnLoop", detail: "Study and revision", icon: "▤", available: false },
+  { name: "DocuVault", detail: "Your documents", icon: "▱", available: false },
+  { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: false },
+  { name: "PricePilot", detail: "Shopping research", icon: "◇", available: false },
+  { name: "AutoFlow", detail: "Connected workflows", icon: "⤳", available: false },
 ];
 
 type User = { id: number; email: string };
@@ -137,10 +138,12 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (token: string, user
 }
 
 function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: string; apiStatus: string; onSignOut: () => void }) {
+  const [activeView, setActiveView] = useState<string>("overview");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [chatError, setChatError] = useState("");
   const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState("");
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -167,22 +170,54 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
     }
   }
 
+  function handleModuleClick(moduleName: string, available: boolean) {
+    if (available) {
+      setActiveView(moduleName.toLowerCase());
+      setNotice("");
+    } else {
+      setNotice(`${moduleName} is scheduled for a future development phase.`);
+      setTimeout(() => setNotice(""), 3500);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#home" aria-label="Personal Assistant home">
+        <a className="brand" href="#home" onClick={(e) => { e.preventDefault(); setActiveView("overview"); }} aria-label="Personal Assistant home">
           <span className="brand-mark">p</span>
           <span>personal<span className="brand-light">assistant</span></span>
         </a>
         <div className="nav-label">WORKSPACE</div>
         <nav aria-label="Modules">
-          {modules.map((module) => (
-            <a className={`module-link${module.active ? " active" : ""}`} href={`#${module.name.toLowerCase()}`} key={module.name}>
-              <span className="module-icon" aria-hidden="true">{module.icon}</span>
-              <span className="module-copy"><strong>{module.name}</strong><small>{module.detail}</small></span>
-              {module.active && <span className="active-dot" />}
-            </a>
-          ))}
+          <button
+            type="button"
+            className={`module-link ${activeView === "overview" ? "active" : ""}`}
+            onClick={() => setActiveView("overview")}
+            style={{ width: "100%", border: 0, textAlign: "left", cursor: "pointer", background: "none" }}
+          >
+            <span className="module-icon" aria-hidden="true">✦</span>
+            <span className="module-copy"><strong>Overview</strong><small>Home dashboard</small></span>
+            {activeView === "overview" && <span className="active-dot" />}
+          </button>
+          {modules.map((module) => {
+            const isActive = activeView === module.name.toLowerCase();
+            return (
+              <button
+                type="button"
+                className={`module-link ${isActive ? "active" : ""}`}
+                onClick={() => handleModuleClick(module.name, module.available)}
+                key={module.name}
+                style={{ width: "100%", border: 0, textAlign: "left", cursor: "pointer", background: "none" }}
+              >
+                <span className="module-icon" aria-hidden="true">{module.icon}</span>
+                <span className="module-copy">
+                  <strong>{module.name}</strong>
+                  <small>{module.detail}</small>
+                </span>
+                {isActive && <span className="active-dot" />}
+              </button>
+            );
+          })}
         </nav>
         <button className="account-row" onClick={onSignOut} title="Sign out">
           <span className="user-avatar">{user.email[0]?.toUpperCase()}</span>
@@ -193,46 +228,112 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
 
       <main className="main-content" id="home">
         <header className="topbar">
-          <div className="breadcrumbs">Workspace <span>/</span> <strong>Overview</strong></div>
+          <div className="breadcrumbs">
+            <span
+              style={{ cursor: "pointer", textDecoration: activeView !== "overview" ? "underline" : "none" }}
+              onClick={() => setActiveView("overview")}
+            >
+              Workspace
+            </span>
+            <span>/</span>
+            <strong>{activeView === "overview" ? "Overview" : activeView.toUpperCase()}</strong>
+          </div>
           <div className="top-actions">
             <span className="connection"><span />{apiStatus}</span>
             <div className="user-avatar small">{user.email[0]?.toUpperCase()}</div>
           </div>
         </header>
 
-        <section className="welcome">
-          <div>
-            <p className="eyebrow">YOUR WORKSPACE</p>
-            <h1>A little more room<br />for what matters.</h1>
-            <p className="welcome-copy">Your personal workspace is ready. Start with one thing you want to get done today.</p>
+        {notice && (
+          <div style={{ margin: "16px 0", padding: "10px 14px", background: "#fdf8ee", border: "1px solid #ebd8a7", borderRadius: "8px", fontSize: "11px", color: "#87661b" }}>
+            {notice}
           </div>
-          <div className="welcome-art" aria-hidden="true"><div className="sun" /><div className="hill hill-back" /><div className="hill hill-front" /><span className="art-sparkle sparkle-one">✳</span><span className="art-sparkle sparkle-two">✦</span></div>
-        </section>
+        )}
 
-        <section className="section-heading">
-          <div><p className="eyebrow">YOUR SPACE</p><h2>Pick up where you are</h2></div>
-          <span className="module-count">8 modules</span>
-        </section>
-        <section className="module-grid" aria-label="Assistant modules">
-          {modules.map((module, index) => (
-            <a className={`module-card card-${index + 1}`} href={`#${module.name.toLowerCase()}`} key={module.name}>
-              <span className="card-icon" aria-hidden="true">{module.icon}</span><span className="card-arrow" aria-hidden="true">↗</span>
-              <h3>{module.name}</h3><p>{module.detail}</p>{index === 0 && <span className="card-tag">START HERE</span>}
-            </a>
-          ))}
-        </section>
+        {/* View Switching */}
+        {activeView === "lifeos" ? (
+          <LifeOSView token={token} />
+        ) : (
+          <>
+            <section className="welcome">
+              <div>
+                <p className="eyebrow">YOUR WORKSPACE</p>
+                <h1>A little more room<br />for what matters.</h1>
+                <p className="welcome-copy">Your personal workspace is ready. Start with one thing you want to get done today.</p>
+              </div>
+              <div className="welcome-art" aria-hidden="true">
+                <div className="sun" />
+                <div className="hill hill-back" />
+                <div className="hill hill-front" />
+                <span className="art-sparkle sparkle-one">✳</span>
+                <span className="art-sparkle sparkle-two">✦</span>
+              </div>
+            </section>
 
+            <section className="section-heading">
+              <div><p className="eyebrow">YOUR SPACE</p><h2>Pick up where you are</h2></div>
+              <span className="module-count">8 modules</span>
+            </section>
+            <section className="module-grid" aria-label="Assistant modules">
+              {modules.map((module, index) => (
+                <div
+                  className={`module-card card-${index + 1}`}
+                  onClick={() => handleModuleClick(module.name, module.available)}
+                  key={module.name}
+                  style={{ cursor: "pointer" }}
+                >
+                  <span className="card-icon" aria-hidden="true">{module.icon}</span>
+                  <span className="card-arrow" aria-hidden="true">↗</span>
+                  <h3>{module.name}</h3>
+                  <p>{module.detail}</p>
+                  {module.available && <span className="card-tag">READY (PHASE 2)</span>}
+                </div>
+              ))}
+            </section>
+          </>
+        )}
+
+        {/* AI Assistant panel is available across views */}
         <section className="assistant-panel" aria-label="AI assistant">
-          <div className="assistant-panel-heading"><div className="assistant-badge">✳</div><div className="assistant-text"><strong>Your assistant</strong><span>Ask a question or try “What can you help me with?”</span></div><span className="assistant-status">READY</span></div>
-          {messages.length > 0 && <div className="chat-messages" aria-live="polite">{messages.map((item, index) => <p className={`chat-message ${item.role}`} key={`${index}-${item.role}`}><strong>{item.role === "user" ? "You" : "Assistant"}</strong>{item.content}</p>)}{sending && <p className="chat-waiting">Thinking…</p>}</div>}
+          <div className="assistant-panel-heading">
+            <div className="assistant-badge">✳</div>
+            <div className="assistant-text">
+              <strong>Your assistant</strong>
+              <span>Ask questions or say &quot;Add a task: Finish slide deck by 5pm&quot; or &quot;Show my tasks&quot;</span>
+            </div>
+            <span className="assistant-status">CONNECTED</span>
+          </div>
+          {messages.length > 0 && (
+            <div className="chat-messages" aria-live="polite">
+              {messages.map((item, index) => (
+                <p className={`chat-message ${item.role}`} key={`${index}-${item.role}`}>
+                  <strong>{item.role === "user" ? "You" : "Assistant"}</strong>
+                  {item.content}
+                </p>
+              ))}
+              {sending && <p className="chat-waiting">Thinking…</p>}
+            </div>
+          )}
           {chatError && <p className="chat-error" role="alert">{chatError}</p>}
           <form className="chat-form" onSubmit={sendMessage}>
-            <input aria-label="Message your assistant" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="What would you like help with?" maxLength={8000} />
+            <input
+              aria-label="Message your assistant"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="What would you like help with? (e.g. 'What tasks are pending?' or 'Create a task...')"
+              maxLength={8000}
+            />
             <button disabled={sending || !prompt.trim()} aria-label="Send message">{sending ? "…" : "Send ↗"}</button>
           </form>
-          <p className="chat-footnote">When AI is configured, your prompt and recent chat context are sent to the selected provider. The starter tool is read-only.</p>
+          <p className="chat-footnote">
+            When configured with an LLM key, the assistant can query and manage your LifeOS tasks in real time via registered tools.
+          </p>
         </section>
-        <footer><span>PERSONAL ASSISTANT <i>·</i> YOUR SPACE, AT YOUR PACE</span><span>FOUNDATION 0.1</span></footer>
+
+        <footer>
+          <span>PERSONAL ASSISTANT <i>·</i> YOUR SPACE, AT YOUR PACE</span>
+          <span>LIFEOS ACTIVE</span>
+        </footer>
       </main>
     </div>
   );

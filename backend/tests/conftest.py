@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base, get_db
 from app.main import app
 from app.modules.auth import models as auth_models  # noqa: F401
+from app.modules.lifeos import models as lifeos_models  # noqa: F401
 
 
 @pytest.fixture
