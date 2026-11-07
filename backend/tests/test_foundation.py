@@ -34,7 +34,7 @@ def test_duplicate_account_is_rejected(client):
     assert duplicate.status_code == 409
 
 
-def test_assistant_requires_authentication(client):
+def test_assistant_auto_authenticates_local_user(client):
     response = client.post("/api/assistant/chat", json={"message": "Hello"})
 
-    assert response.status_code == 401
+    assert response.status_code in (200, 503)

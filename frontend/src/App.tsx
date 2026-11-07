@@ -23,9 +23,7 @@ type User = { id: number; email: string };
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
 function App() {
-  const [token, setToken] = useState(() => sessionStorage.getItem("access_token") ?? "");
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(Boolean(token));
+  const [user, setUser] = useState<User>({ id: 1, email: "devansh@local" });
   const [apiStatus, setApiStatus] = useState("Checking API…");
 
   useEffect(() => {
@@ -35,116 +33,19 @@ function App() {
         setApiStatus(data.status === "ok" ? "API online" : "API offline");
       })
       .catch(() => setApiStatus("API offline"));
+
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: User | null) => {
+        if (data) setUser(data);
+      })
+      .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!token) {
-      setAuthLoading(false);
-      return;
-    }
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
-      .then((response) => {
-        if (!response.ok) throw new Error("Session expired");
-        return response.json() as Promise<User>;
-      })
-      .then(setUser)
-      .catch(() => {
-        sessionStorage.removeItem("access_token");
-        setToken("");
-      })
-      .finally(() => setAuthLoading(false));
-  }, [token]);
-
-  function onAuthenticated(accessToken: string, account: User) {
-    sessionStorage.setItem("access_token", accessToken);
-    setToken(accessToken);
-    setUser(account);
-  }
-
-  function signOut() {
-    sessionStorage.removeItem("access_token");
-    setToken("");
-    setUser(null);
-  }
-
-  if (authLoading) return <div className="loading-screen">Opening your workspace…</div>;
-  if (!token || !user) return <AuthScreen onAuthenticated={onAuthenticated} />;
-
-  return <Dashboard user={user} token={token} apiStatus={apiStatus} onSignOut={signOut} />;
+  return <Dashboard user={user} token="" apiStatus={apiStatus} />;
 }
 
-function AuthScreen({ onAuthenticated }: { onAuthenticated: (token: string, user: User) => void }) {
-  const [registering, setRegistering] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      if (registering) {
-        const response = await fetch("/api/auth/register", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        });
-        if (!response.ok) throw new Error(await readError(response));
-      }
-
-      const response = await fetch("/api/auth/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ username: email, password }),
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const auth = (await response.json()) as { access_token: string };
-      const accountResponse = await fetch("/api/auth/me", {
-        headers: { Authorization: `Bearer ${auth.access_token}` },
-      });
-      if (!accountResponse.ok) throw new Error("Could not load your account. Please sign in again.");
-      onAuthenticated(auth.access_token, (await accountResponse.json()) as User);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not sign in. Check the backend and try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <main className="auth-page">
-      <div className="auth-card">
-        <a className="brand auth-brand" href="#home">
-          <span className="brand-mark">p</span>
-          <span>personal<span className="brand-light">assistant</span></span>
-        </a>
-        <p className="eyebrow">YOUR PERSONAL WORKSPACE</p>
-        <h1>{registering ? "Make space for what matters." : "Welcome back."}</h1>
-        <p className="auth-copy">{registering ? "Create your private workspace to get started." : "Sign in to open your personal workspace."}</p>
-        <form className="auth-form" onSubmit={submit}>
-          <label htmlFor="email">Email address</label>
-          <input id="email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
-          <label htmlFor="password">Password</label>
-          <input id="password" type="password" autoComplete={registering ? "new-password" : "current-password"} minLength={registering ? 10 : 1} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} />
-          {registering && <small className="field-hint">Use at least 10 characters.</small>}
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="primary-button" disabled={busy}>{busy ? "Please wait…" : registering ? "Create account" : "Sign in"}</button>
-        </form>
-        <p className="auth-switch">
-          {registering ? "Already have an account?" : "New to the workspace?"}{" "}
-          <button onClick={() => { setRegistering(!registering); setError(""); }}>
-            {registering ? "Sign in" : "Create an account"}
-          </button>
-        </p>
-        <p className="auth-note">Your account is stored in the local project database.</p>
-      </div>
-    </main>
-  );
-}
-
-function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: string; apiStatus: string; onSignOut: () => void }) {
+function Dashboard({ user, token, apiStatus }: { user: User; token: string; apiStatus: string }) {
   const [activeView, setActiveView] = useState<string>("overview");
   const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
   const [selectedPriceQuery, setSelectedPriceQuery] = useState<string | null>(null);
@@ -166,7 +67,7 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
     try {
       const response = await fetch("/api/assistant/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, history: messages.slice(-20) }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -185,19 +86,18 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
       setNotice("");
     } else {
       setNotice(`${moduleName} is scheduled for a future development phase.`);
-      setTimeout(() => setNotice(""), 3500);
     }
   }
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="#home" onClick={(e) => { e.preventDefault(); setActiveView("overview"); }} aria-label="Personal Assistant home">
-          <span className="brand-mark">p</span>
+      <aside className="sidebar" aria-label="Sidebar navigation">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">p</span>
           <span>personal<span className="brand-light">assistant</span></span>
-        </a>
-        <div className="nav-label">WORKSPACE</div>
-        <nav aria-label="Modules">
+        </div>
+        <p className="nav-label">MODULES</p>
+        <nav className="nav-list">
           <button
             type="button"
             className={`module-link ${activeView === "overview" ? "active" : ""}`}
@@ -228,11 +128,10 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
             );
           })}
         </nav>
-        <button className="account-row" onClick={onSignOut} title="Sign out">
+        <div className="account-row" title="Local Workspace Active">
           <span className="user-avatar">{user.email[0]?.toUpperCase()}</span>
-          <span><strong>{user.email}</strong><small>Personal account · Sign out</small></span>
-          <span className="more-button">↗</span>
-        </button>
+          <span><strong>{user.email}</strong><small>Local Assistant · Active</small></span>
+        </div>
       </aside>
 
       <main className="main-content" id="home">
@@ -294,7 +193,7 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
               <div>
                 <p className="eyebrow">YOUR WORKSPACE</p>
                 <h1>A little more room<br />for what matters.</h1>
-                <p className="welcome-copy">Your personal workspace is ready. Start with one thing you want to get done today.</p>
+                <p className="welcome-copy">Your personal workspace is ready. Pick any module or ask your AI assistant to manage tasks, emails, expenses, meals, and automations.</p>
               </div>
               <div className="welcome-art" aria-hidden="true">
                 <div className="sun" />
@@ -306,8 +205,8 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
             </section>
 
             <section className="section-heading">
-              <div><p className="eyebrow">YOUR SPACE</p><h2>Pick up where you are</h2></div>
-              <span className="module-count">8 modules</span>
+              <div><p className="eyebrow">YOUR SPACE</p><h2>All Modules Ready</h2></div>
+              <span className="module-count">8 modules active</span>
             </section>
             <section className="module-grid" aria-label="Assistant modules">
               {modules.map((module, index) => (
@@ -321,7 +220,7 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
                   <span className="card-arrow" aria-hidden="true">↗</span>
                   <h3>{module.name}</h3>
                   <p>{module.detail}</p>
-                  {module.available && <span className="card-tag">READY (PHASE 2)</span>}
+                  <span className="card-tag">READY</span>
                 </div>
               ))}
             </section>
@@ -334,7 +233,7 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
             <div className="assistant-badge">✳</div>
             <div className="assistant-text">
               <strong>Your assistant</strong>
-              <span>Ask questions or say &quot;Add a task: Finish slide deck by 5pm&quot; or &quot;Show my tasks&quot;</span>
+              <span>Ask questions or say &quot;Add a task: Finish slide deck by 5pm&quot;, &quot;Summarize inbox&quot;, &quot;What's for dinner?&quot; or &quot;Morning briefing&quot;</span>
             </div>
             <span className="assistant-status">CONNECTED</span>
           </div>
@@ -349,26 +248,19 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
               {sending && <p className="chat-waiting">Thinking…</p>}
             </div>
           )}
-          {chatError && <p className="chat-error" role="alert">{chatError}</p>}
           <form className="chat-form" onSubmit={sendMessage}>
             <input
-              aria-label="Message your assistant"
+              type="text"
+              placeholder="Ask anything or request an action across your modules…"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="What would you like help with? (e.g. 'Log expense $45 for groceries', 'Spending summary', 'Tasks', 'Emails')..."
-              maxLength={8000}
             />
-            <button disabled={sending || !prompt.trim()} aria-label="Send message">{sending ? "…" : "Send ↗"}</button>
+            <button type="submit" disabled={sending || !prompt.trim()}>
+              Send
+            </button>
           </form>
-          <p className="chat-footnote">
-            When configured with an LLM key, your assistant can manage LifeOS tasks, triage InboxZero emails, and log/track SpendWise expenses.
-          </p>
+          {chatError && <p className="chat-error">{chatError}</p>}
         </section>
-
-        <footer>
-          <span>PERSONAL ASSISTANT <i>·</i> YOUR SPACE, AT YOUR PACE</span>
-          <span>PHASE 4: SPENDWISE ACTIVE</span>
-        </footer>
       </main>
     </div>
   );
@@ -376,11 +268,12 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
 
 async function readError(response: Response): Promise<string> {
   try {
-    const body = (await response.json()) as { detail?: string };
-    return body.detail ?? `Request failed (${response.status})`;
+    const data = (await response.json()) as { detail?: string };
+    if (data && typeof data.detail === "string") return data.detail;
   } catch {
-    return `Request failed (${response.status})`;
+    // ignore
   }
+  return `Request failed (${response.status})`;
 }
 
 export default App;
