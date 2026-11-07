@@ -11,6 +11,8 @@ from app.modules.docuvault import models as docuvault_models  # noqa: F401
 from app.modules.inboxzero import models as inboxzero_models  # noqa: F401
 from app.modules.learnloop import models as learnloop_models  # noqa: F401
 from app.modules.lifeos import models as lifeos_models  # noqa: F401
+from app.modules.mealmind import models as mealmind_models  # noqa: F401
+from app.modules.pricepilot import models as pricepilot_models  # noqa: F401
 from app.modules.spendwise import models as spendwise_models  # noqa: F401
 
 

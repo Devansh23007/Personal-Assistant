@@ -29,6 +29,18 @@ from app.modules.lifeos.service import (
     list_tasks as lifeos_list_tasks,
     update_task as lifeos_update_task,
 )
+from app.modules.mealmind.schemas import GroceryItemCreate
+from app.modules.mealmind.service import (
+    add_grocery_item as mealmind_add_grocery,
+    get_grocery_summary as mealmind_get_grocery_summary,
+    list_grocery_items as mealmind_list_grocery,
+    list_meal_plans as mealmind_list_plans,
+    seed_demo_mealmind_if_empty as mealmind_seed_demo,
+)
+from app.modules.pricepilot.service import (
+    compare_item_prices as pricepilot_compare,
+    seed_demo_prices_if_empty as pricepilot_seed_demo,
+)
 from app.modules.spendwise.schemas import TransactionCreate
 from app.modules.spendwise.service import (
     create_transaction as spendwise_create_tx,
@@ -360,6 +372,76 @@ def _create_deck_from_document(arguments: dict[str, object], context: ToolContex
     return f"Created LearnLoop study deck '{deck.title}' (Deck ID {deck.id}) from document ID {doc_id_int}."
 
 
+# --- MealMind & PricePilot Tools ---
+def _plan_meals(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    mealmind_seed_demo(context.db, context.user.id)
+    plans = mealmind_list_plans(context.db, context.user.id)
+    if not plans:
+        return "No meals currently planned in MealMind."
+
+    lines = ["Upcoming Meal Plan:"]
+    for p in plans[:8]:
+        name = p.recipe_title or p.custom_meal_name or "Custom Meal"
+        lines.append(f"- {p.plan_date.isoformat()} [{p.meal_type.upper()}]: {name}")
+    return "\n".join(lines)
+
+
+def _get_grocery_list(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    mealmind_seed_demo(context.db, context.user.id)
+    items = mealmind_list_grocery(context.db, context.user.id)
+    if not items:
+        return "Your grocery list is empty."
+
+    lines = [f"Grocery List ({len(items)} item(s)):"]
+    for i in items:
+        status_sym = "✓" if i.is_purchased else "○"
+        lines.append(f"- [{status_sym}] {i.item_name} ({i.quantity}) [{i.category}] ~${i.estimated_cost:.2f}")
+    return "\n".join(lines)
+
+
+def _add_grocery_item(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    name = str(arguments.get("item_name", "")).strip()
+    if not name:
+        return "item_name is required."
+    quantity = str(arguments.get("quantity", "1"))
+    category = str(arguments.get("category", "produce"))
+    item = mealmind_add_grocery(
+        context.db,
+        context.user.id,
+        GroceryItemCreate(item_name=name, quantity=quantity, category=category, estimated_cost=3.0),
+    )
+    return f"Added '{item.item_name}' ({item.quantity}) to your MealMind grocery list."
+
+
+def _search_product_prices(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    query = str(arguments.get("item_name", "")).strip()
+    if not query:
+        return "item_name is required to search prices."
+    pricepilot_seed_demo(context.db, context.user.id)
+    comp = pricepilot_compare(context.db, context.user.id, query=query)
+    if not comp:
+        return f"No store price comparisons found matching '{query}' in PricePilot."
+
+    lines = [
+        f"Price Comparison for '{comp.matched_item}':",
+        f"Best deal at {comp.cheapest_store}: ${comp.lowest_price:.2f} (Save up to ${comp.potential_savings:.2f})",
+        "Store Breakdown:",
+    ]
+    for o in comp.offers:
+        badge = " [BEST DEAL]" if o.is_best_price else ""
+        deal = f" ({o.deal_description})" if o.deal_description else ""
+        lines.append(f"- {o.store_name}: ${o.price:.2f}/{o.unit}{deal}{badge}")
+    return "\n".join(lines)
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -578,6 +660,52 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_meals",
+            "description": "View planned meals or weekly meal schedule in MealMind.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_grocery_list",
+            "description": "Retrieve active grocery items needed on the MealMind grocery list.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_grocery_item",
+            "description": "Add an item to the MealMind grocery list.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_name": {"type": "string", "description": "Name of grocery item or ingredient"},
+                    "quantity": {"type": "string", "description": "Quantity or packaging, e.g. '2 bags', '1 dozen'"},
+                    "category": {"type": "string", "description": "Category (produce, dairy, meat, pantry, bakery, other)"},
+                },
+                "required": ["item_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_product_prices",
+            "description": "Search and compare product prices across stores in PricePilot to find the best deal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_name": {"type": "string", "description": "Product or ingredient name to compare prices for"},
+                },
+                "required": ["item_name"],
+            },
+        },
+    },
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -595,6 +723,10 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "search_documents": _search_documents,
     "get_study_flashcards": _get_study_flashcards,
     "create_deck_from_document": _create_deck_from_document,
+    "plan_meals": _plan_meals,
+    "get_grocery_list": _get_grocery_list,
+    "add_grocery_item": _add_grocery_item,
+    "search_product_prices": _search_product_prices,
 }
 
 

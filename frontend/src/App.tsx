@@ -3,6 +3,8 @@ import { DocuVaultView } from "./DocuVaultView";
 import { InboxZeroView } from "./InboxZeroView";
 import { LearnLoopView } from "./LearnLoopView";
 import { LifeOSView } from "./LifeOSView";
+import { MealMindView } from "./MealMindView";
+import { PricePilotView } from "./PricePilotView";
 import { SpendWiseView } from "./SpendWiseView";
 
 const modules = [
@@ -11,8 +13,8 @@ const modules = [
   { name: "SpendWise", detail: "Expenses and budgets", icon: "₹", available: true },
   { name: "LearnLoop", detail: "Study and revision", icon: "▤", available: true },
   { name: "DocuVault", detail: "Your documents", icon: "▱", available: true },
-  { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: false },
-  { name: "PricePilot", detail: "Shopping research", icon: "◇", available: false },
+  { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: true },
+  { name: "PricePilot", detail: "Shopping research", icon: "◇", available: true },
   { name: "AutoFlow", detail: "Connected workflows", icon: "⤳", available: false },
 ];
 
@@ -144,6 +146,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (token: string, user
 function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: string; apiStatus: string; onSignOut: () => void }) {
   const [activeView, setActiveView] = useState<string>("overview");
   const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
+  const [selectedPriceQuery, setSelectedPriceQuery] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [chatError, setChatError] = useState("");
@@ -272,6 +275,16 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
           />
         ) : activeView === "learnloop" ? (
           <LearnLoopView token={token} initialDeckId={selectedDeckId} />
+        ) : activeView === "mealmind" ? (
+          <MealMindView
+            token={token}
+            onCheckPrices={(itemName) => {
+              setSelectedPriceQuery(itemName);
+              setActiveView("pricepilot");
+            }}
+          />
+        ) : activeView === "pricepilot" ? (
+          <PricePilotView token={token} initialSearchQuery={selectedPriceQuery} />
         ) : (
           <>
             <section className="welcome">

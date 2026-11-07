@@ -223,3 +223,99 @@
 .celebration-icon{font-size:42px;display:block;margin-bottom:12px}
 .session-complete-box h4{font-size:20px;color:#28382d;margin:0 0 8px}
 .session-complete-box p{font-size:13px;color:#6d7b6e;margin:0 0 20px}
+
+/* MealMind & PricePilot Styles */
+.mealmind-view, .pricepilot-view{margin-top:28px}
+.tab-bar{display:flex;gap:6px;border-bottom:1px solid #e3e8e0;padding-bottom:10px;margin-bottom:20px}
+.tab-btn{background:transparent;border:none;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;color:#657366;cursor:pointer}
+.tab-btn:hover{background:#edf2ec}
+.tab-btn.active{background:#315f48;color:#fff}
+.add-plan-form, .add-recipe-form, .add-grocery-form{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:20px;margin-bottom:24px}
+.add-plan-form h3, .add-recipe-form h3, .add-grocery-form h3{margin:0 0 16px;font-size:15px;color:#28382d}
+.meal-plans-timeline{display:flex;flex-direction:column;gap:12px}
+.meal-plan-card{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:18px}
+.plan-badge-col{display:flex;flex-direction:column;gap:4px;min-width:105px}
+.meal-type-badge{font-size:10px;font-weight:700;letter-spacing:.6px;background:#eaf2e8;color:#2e643f;padding:3px 8px;border-radius:6px;display:inline-block;text-align:center}
+.meal-date-str{font-size:11px;color:#819082;text-align:center}
+.plan-details-col{flex:1;min-width:0}
+.plan-details-col h4{margin:0 0 4px;font-size:14px;color:#28382d}
+.plan-notes{margin:0;font-size:11px;color:#6e7d6f}
+.plan-actions-col{display:flex;gap:8px}
+.recipes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.recipe-card{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.recipe-top{display:flex;justify-content:space-between;align-items:flex-start}
+.recipe-top h4{margin:0;font-size:14px;color:#28382d}
+.prep-time-badge{font-size:10px;background:#f5efe3;color:#855c17;padding:3px 7px;border-radius:6px;white-space:nowrap}
+.recipe-desc{margin:0;font-size:11px;color:#6d7c6e;line-height:1.5}
+.recipe-tags{display:flex;flex-wrap:wrap;gap:4px}
+.diet-tag{font-size:9px;background:#edf3ec;color:#3f694d;padding:2px 6px;border-radius:4px}
+.recipe-footer{display:flex;justify-content:space-between;align-items:center;margin-top:auto;padding-top:10px;border-top:1px solid #f2f5f0}
+.ingredient-count{font-size:11px;color:#839184}
+.grocery-metrics-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.groc-metric{background:#fff;border:1px solid #e9ece6;border-radius:10px;padding:12px 16px;display:flex;flex-direction:column;gap:4px}
+.groc-metric .label{font-size:10px;color:#839184;text-transform:uppercase;font-weight:600}
+.groc-metric strong{font-size:18px;color:#28382d}
+.text-warning{color:#a8611c!important}
+.text-success{color:#2a7543!important}
+.text-muted{color:#8f9c90!important}
+.grocery-category-groups{display:flex;flex-direction:column;gap:16px}
+.grocery-category-block{background:#fff;border:1px solid #e9ece6;border-radius:12px;padding:16px 20px}
+.category-heading{margin:0 0 12px;font-size:12px;letter-spacing:1px;color:#5a6d5c}
+.grocery-items-table{display:flex;flex-direction:column;gap:6px}
+.grocery-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #f3f6f1}
+.grocery-row.purchased{opacity:0.55;text-decoration:line-through}
+.groc-name-col{flex:1;display:flex;align-items:center;gap:8px}
+.groc-name-col strong{font-size:13px;color:#28382d}
+.groc-qty{font-size:11px;color:#7e8d7f;background:#f3f6f1;padding:2px 6px;border-radius:4px}
+.groc-cost{font-size:12px;font-weight:600;color:#475b49;min-width:60px;text-align:right}
+.groc-actions{display:flex;gap:10px;align-items:center}
+.btn-remove{background:none;border:none;color:#b4493b;cursor:pointer;font-size:12px}
+.recipe-modal-body h4{font-size:13px;color:#28382d;margin:12px 0 8px}
+.ingredients-list{margin:0 0 16px;padding-left:18px;font-size:12px;color:#3a4b3c;line-height:1.7}
+.btn-link-sm{background:none;border:none;color:#315f48;text-decoration:underline;cursor:pointer;font-size:10px;margin-left:8px}
+.instructions-body{background:#fbfcf9;border:1px solid #e7ede4;border-radius:8px;padding:12px;font-family:inherit;font-size:12px;color:#384939;line-height:1.6;white-space:pre-wrap;margin:0}
+.comparison-card{background:#fff;border:1px solid #e9ece6;border-radius:14px;padding:22px;margin-top:16px}
+.comparison-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px}
+.comp-category-tag{font-size:9px;font-weight:700;letter-spacing:1px;color:#7e8e7f}
+.comparison-header h3{margin:4px 0 0;font-size:20px;color:#28382d}
+.savings-badge{background:#e7f5eb;border:1px solid #c2e5cc;border-radius:10px;padding:10px 16px;display:flex;flex-direction:column;gap:2px;text-align:right}
+.best-label{font-size:10px;color:#4f7a59;text-transform:uppercase}
+.savings-badge strong{font-size:15px;color:#1e5d32}
+.savings-val{font-size:11px;font-weight:700;color:#287440}
+.store-offers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+.store-offer-card{background:#fcfdfa;border:1px solid #e7ede4;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:8px;position:relative}
+.store-offer-card.best-deal{background:#f6fbf7;border:2px solid #559569}
+.best-deal-ribbon{position:absolute;top:-10px;right:10px;background:#315f48;color:#fff;font-size:8px;font-weight:800;letter-spacing:1px;padding:3px 8px;border-radius:10px}
+.store-name{margin:0;font-size:14px;color:#28382d}
+.store-price-row{display:flex;align-items:baseline}
+.currency{font-size:14px;color:#536755;font-weight:600}
+.price-val{font-size:24px;font-weight:700;color:#28382d;margin-left:2px}
+.price-unit{font-size:11px;color:#7d8c7e;margin-left:4px}
+.deal-pill{font-size:10px;background:#fff3e3;color:#8f5413;padding:3px 8px;border-radius:6px;display:inline-block;font-weight:600}
+.stock-status{font-size:11px}
+.stock-status.in-stock{color:#2a7543}
+.stock-status.out-of-stock{color:#aa4133}
+.basket-optimizer-section{background:#fff;border:1px solid #e9ece6;border-radius:14px;padding:22px;margin-bottom:28px}
+.basket-form{margin:14px 0 20px}
+.basket-form label{font-size:12px;font-weight:600;color:#526454;display:block;margin-bottom:8px}
+.basket-input-row{display:flex;gap:10px}
+.basket-input-row input{flex:1;border:1px solid #d4ddd1;border-radius:8px;padding:10px 14px;font-size:12px}
+.basket-results-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.basket-store-card{background:#fbfcf9;border:1px solid #e7ebe3;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:6px;position:relative}
+.basket-store-card.best-store{background:#f5faf6;border:2px solid #4a8d5e}
+.best-store-tag{position:absolute;top:-10px;right:12px;background:#2b643d;color:#fff;font-size:8px;font-weight:800;letter-spacing:.8px;padding:3px 8px;border-radius:10px}
+.basket-store-card h4{margin:0;font-size:15px;color:#28382d}
+.basket-cost{font-size:22px;font-weight:700;color:#28382d}
+.items-matched{font-size:11px;color:#6d7f6f}
+.missing-list{font-size:10px;color:#a84334}
+.catalog-section{background:#fff;border:1px solid #e9ece6;border-radius:14px;padding:22px;margin-bottom:28px}
+.catalog-header-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+.catalog-header-row h3{margin:0;font-size:15px;color:#28382d}
+.cat-filters{display:flex;gap:6px}
+.cat-pill{border:1px solid #d7e0d4;background:#fcfdfa;color:#5b6e5d;padding:4px 10px;border-radius:14px;font-size:11px;cursor:pointer;text-transform:capitalize}
+.cat-pill.active{background:#315f48;color:#fff;border-color:#315f48}
+.catalog-table-wrap{overflow-x:auto}
+.catalog-table{width:100%;border-collapse:collapse;font-size:12px}
+.catalog-table th{background:#f8fbf7;padding:10px 14px;color:#677a69;border-bottom:1px solid #e5ebe2;text-align:left}
+.catalog-table td{padding:11px 14px;border-bottom:1px solid #f1f5ee;color:#354536}
+.tag-simple{background:#edf3eb;color:#3a6147;font-size:10px;padding:2px 6px;border-radius:4px;text-transform:uppercase}

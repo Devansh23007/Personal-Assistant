@@ -132,6 +132,23 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | GET | `/api/learnloop/decks/{id}/cards` | List cards for review (optional `due_only=true`) |
 | POST | `/api/learnloop/decks/{id}/cards` | Add flashcard to deck |
 | POST | `/api/learnloop/cards/{id}/review` | Review card rating (`hard`, `good`, `easy`) with spaced repetition |
+| GET | `/api/mealmind/recipes` | List recipes with dietary tag filters |
+| POST | `/api/mealmind/recipes` | Create custom recipe with ingredients and steps |
+| GET | `/api/mealmind/recipes/{id}` | Single recipe details |
+| DELETE | `/api/mealmind/recipes/{id}` | Delete a recipe |
+| GET | `/api/mealmind/plans` | List scheduled meals with date range filters |
+| POST | `/api/mealmind/plans` | Add meal to planner |
+| DELETE | `/api/mealmind/plans/{id}` | Remove a meal plan |
+| GET | `/api/mealmind/grocery` | List grocery items with purchase status filter |
+| GET | `/api/mealmind/grocery/summary` | Grocery metrics, estimated total cost, and items by category |
+| POST | `/api/mealmind/grocery` | Add grocery item |
+| PATCH | `/api/mealmind/grocery/{id}` | Toggle purchased status or update item details |
+| DELETE | `/api/mealmind/grocery/{id}` | Remove grocery item |
+| POST | `/api/mealmind/grocery/generate-from-plans` | Auto-sync missing recipe ingredients to grocery list |
+| GET | `/api/pricepilot/prices` | Catalog of store product prices |
+| POST | `/api/pricepilot/prices` | Record new product store price |
+| GET | `/api/pricepilot/compare` | Compare grocery item prices across stores (`q=...`) |
+| POST | `/api/pricepilot/basket-analysis` | Smart grocery basket optimization across stores |
 
 ## Foundation scope and safety
 

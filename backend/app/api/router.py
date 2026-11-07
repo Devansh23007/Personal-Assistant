@@ -7,6 +7,8 @@ from app.modules.health.router import router as health_router
 from app.modules.inboxzero.router import router as inboxzero_router
 from app.modules.learnloop.router import router as learnloop_router
 from app.modules.lifeos.router import router as lifeos_router
+from app.modules.mealmind.router import router as mealmind_router
+from app.modules.pricepilot.router import router as pricepilot_router
 from app.modules.spendwise.router import router as spendwise_router
 
 api_router = APIRouter()
@@ -18,3 +20,5 @@ api_router.include_router(inboxzero_router)
 api_router.include_router(spendwise_router)
 api_router.include_router(docuvault_router)
 api_router.include_router(learnloop_router)
+api_router.include_router(mealmind_router)
+api_router.include_router(pricepilot_router)
