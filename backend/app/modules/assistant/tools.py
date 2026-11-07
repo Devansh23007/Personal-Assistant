@@ -6,12 +6,22 @@ import json
 from sqlalchemy.orm import Session
 
 from app.modules.auth.models import User
+from app.modules.docuvault.service import (
+    search_documents_rag as docuvault_search_rag,
+    seed_demo_documents_if_empty as docuvault_seed_demo,
+)
 from app.modules.inboxzero.service import (
     generate_draft_reply as inboxzero_generate_draft_reply,
     get_or_create_account as inboxzero_get_or_create_account,
     list_drafts as inboxzero_list_drafts,
     list_messages as inboxzero_list_messages,
     seed_demo_inbox_if_empty as inboxzero_seed_demo,
+)
+from app.modules.learnloop.service import (
+    generate_deck_from_document as learnloop_generate_deck,
+    list_cards_for_deck as learnloop_list_cards,
+    list_decks_with_stats as learnloop_list_decks,
+    seed_demo_deck_if_empty as learnloop_seed_demo,
 )
 from app.modules.lifeos.schemas import TaskCreate, TaskUpdate
 from app.modules.lifeos.service import (
@@ -284,6 +294,72 @@ def _check_budget_status(arguments: dict[str, object], context: ToolContext) -> 
     return "\n".join(lines)
 
 
+# --- DocuVault Tools ---
+def _search_documents(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        return "Search query is required."
+    docuvault_seed_demo(context.db, context.user.id)
+    result = docuvault_search_rag(context.db, context.user.id, query=query, limit=4)
+    if result.total_matches == 0:
+        return f"No documents matched '{query}' in DocuVault."
+    lines = [f"Found {result.total_matches} citation(s) in DocuVault for '{query}':"]
+    for cit in result.citations:
+        lines.append(f"- [Doc {cit.document_id}: {cit.title}]\n  Excerpt: {cit.snippet}")
+    return "\n".join(lines)
+
+
+# --- LearnLoop Tools ---
+def _get_study_flashcards(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    learnloop_seed_demo(context.db, context.user.id)
+    decks = learnloop_list_decks(context.db, context.user.id)
+    if not decks:
+        return "No study decks found in LearnLoop."
+
+    target_deck_id = arguments.get("deck_id")
+    if target_deck_id:
+        try:
+            target_id = int(target_deck_id)  # type: ignore[arg-type]
+            target_deck = next((d for d in decks if d.id == target_id), None)
+        except (ValueError, TypeError):
+            target_deck = decks[0]
+    else:
+        target_deck = decks[0]
+
+    if not target_deck:
+        return "Study deck not found."
+
+    cards = learnloop_list_cards(context.db, context.user.id, target_deck.id, due_only=True)
+    if not cards:
+        cards = learnloop_list_cards(context.db, context.user.id, target_deck.id, due_only=False)
+
+    lines = [f"Flashcards from '{target_deck.title}' ({len(cards)} card(s)):"]
+    for i, c in enumerate(cards[:5], 1):
+        lines.append(f"{i}. Q: {c.front}\n   A: {c.back} [Status: {c.status}]")
+    return "\n".join(lines)
+
+
+def _create_deck_from_document(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    doc_id = arguments.get("document_id")
+    if not doc_id:
+        return "document_id is required."
+    try:
+        doc_id_int = int(doc_id)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return "Invalid document_id."
+
+    deck = learnloop_generate_deck(context.db, context.user.id, doc_id_int)
+    if not deck:
+        return f"Document ID {doc_id_int} not found in DocuVault."
+    return f"Created LearnLoop study deck '{deck.title}' (Deck ID {deck.id}) from document ID {doc_id_int}."
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -460,6 +536,48 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": "Search saved documents in DocuVault by keywords or concepts with source citations and text excerpts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query keywords or concepts"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_study_flashcards",
+            "description": "Get study flashcards from LearnLoop for revision and active recall.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deck_id": {"type": "integer", "description": "Optional study deck ID"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_deck_from_document",
+            "description": "Generate a new study deck of revision flashcards from a document in DocuVault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "DocuVault document ID to convert into flashcards"},
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -474,6 +592,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "log_expense": _log_expense,
     "get_spending_summary": _get_spending_summary,
     "check_budget_status": _check_budget_status,
+    "search_documents": _search_documents,
+    "get_study_flashcards": _get_study_flashcards,
+    "create_deck_from_document": _create_deck_from_document,
 }
 
 

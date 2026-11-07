@@ -16,6 +16,7 @@ dist/
 !.env.example
 *.db
 *.sqlite*
+storage/
 .idea/
 .vscode/
 

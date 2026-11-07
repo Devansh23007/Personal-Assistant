@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
+import { DocuVaultView } from "./DocuVaultView";
 import { InboxZeroView } from "./InboxZeroView";
+import { LearnLoopView } from "./LearnLoopView";
 import { LifeOSView } from "./LifeOSView";
 import { SpendWiseView } from "./SpendWiseView";
 
@@ -7,8 +9,8 @@ const modules = [
   { name: "LifeOS", detail: "Tasks and planning", icon: "◷", available: true },
   { name: "InboxZero", detail: "Email summaries & triage", icon: "✉", available: true },
   { name: "SpendWise", detail: "Expenses and budgets", icon: "₹", available: true },
-  { name: "LearnLoop", detail: "Study and revision", icon: "▤", available: false },
-  { name: "DocuVault", detail: "Your documents", icon: "▱", available: false },
+  { name: "LearnLoop", detail: "Study and revision", icon: "▤", available: true },
+  { name: "DocuVault", detail: "Your documents", icon: "▱", available: true },
   { name: "MealMind", detail: "Meals and groceries", icon: "⌂", available: false },
   { name: "PricePilot", detail: "Shopping research", icon: "◇", available: false },
   { name: "AutoFlow", detail: "Connected workflows", icon: "⤳", available: false },
@@ -141,6 +143,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (token: string, user
 
 function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: string; apiStatus: string; onSignOut: () => void }) {
   const [activeView, setActiveView] = useState<string>("overview");
+  const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [chatError, setChatError] = useState("");
@@ -259,6 +262,16 @@ function Dashboard({ user, token, apiStatus, onSignOut }: { user: User; token: s
           <InboxZeroView token={token} />
         ) : activeView === "spendwise" ? (
           <SpendWiseView token={token} />
+        ) : activeView === "docuvault" ? (
+          <DocuVaultView
+            token={token}
+            onSwitchToDeck={(deckId) => {
+              setSelectedDeckId(deckId);
+              setActiveView("learnloop");
+            }}
+          />
+        ) : activeView === "learnloop" ? (
+          <LearnLoopView token={token} initialDeckId={selectedDeckId} />
         ) : (
           <>
             <section className="welcome">

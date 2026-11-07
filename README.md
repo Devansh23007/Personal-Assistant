@@ -119,6 +119,19 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | GET | `/api/spendwise/budgets` | Category budgets with spending progress |
 | POST | `/api/spendwise/budgets` | Set or update monthly category budget |
 | DELETE | `/api/spendwise/budgets/{id}` | Delete a budget |
+| GET | `/api/docuvault/documents` | List stored documents with search and tags |
+| POST | `/api/docuvault/documents` | Store and index a new document |
+| GET | `/api/docuvault/documents/search` | Semantic & keyword RAG search with source citations |
+| GET | `/api/docuvault/documents/{id}` | Retrieve document text and metadata |
+| DELETE | `/api/docuvault/documents/{id}` | Delete document from vault and storage |
+| GET | `/api/learnloop/decks` | List study decks with card and review stats |
+| POST | `/api/learnloop/decks` | Create a new study deck |
+| GET | `/api/learnloop/decks/{id}` | Retrieve study deck |
+| DELETE | `/api/learnloop/decks/{id}` | Delete study deck and cards |
+| POST | `/api/learnloop/decks/generate-from-doc/{doc_id}` | Auto-generate flashcards from DocuVault document |
+| GET | `/api/learnloop/decks/{id}/cards` | List cards for review (optional `due_only=true`) |
+| POST | `/api/learnloop/decks/{id}/cards` | Add flashcard to deck |
+| POST | `/api/learnloop/cards/{id}/review` | Review card rating (`hard`, `good`, `easy`) with spaced repetition |
 
 ## Foundation scope and safety
 
