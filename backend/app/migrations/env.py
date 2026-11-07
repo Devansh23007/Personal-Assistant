@@ -8,6 +8,7 @@ from app.core.database import Base
 from app.modules.auth import models as auth_models  # noqa: F401
 from app.modules.inboxzero import models as inboxzero_models  # noqa: F401
 from app.modules.lifeos import models as lifeos_models  # noqa: F401
+from app.modules.spendwise import models as spendwise_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))

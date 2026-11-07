@@ -109,6 +109,16 @@ Feature modules belong under `backend/app/modules/` and can own their routes, mo
 | POST | `/api/inboxzero/drafts` | Create manual draft |
 | POST | `/api/inboxzero/drafts/{id}/send` | Explicit human approval gate: send draft |
 | DELETE | `/api/inboxzero/drafts/{id}` | Discard a draft |
+| GET | `/api/spendwise/summary` | Financial metrics (income, expenses, savings rate, breakdown) |
+| GET | `/api/spendwise/transactions` | Filter transactions by type, category, month, and search |
+| POST | `/api/spendwise/transactions` | Log new transaction |
+| GET | `/api/spendwise/transactions/{id}` | Single transaction details |
+| PATCH | `/api/spendwise/transactions/{id}` | Update transaction |
+| DELETE | `/api/spendwise/transactions/{id}` | Delete transaction |
+| POST | `/api/spendwise/transactions/import-csv` | Import transactions from CSV format |
+| GET | `/api/spendwise/budgets` | Category budgets with spending progress |
+| POST | `/api/spendwise/budgets` | Set or update monthly category budget |
+| DELETE | `/api/spendwise/budgets/{id}` | Delete a budget |
 
 ## Foundation scope and safety
 

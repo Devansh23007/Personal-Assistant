@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import json
 
 from sqlalchemy.orm import Session
@@ -18,6 +18,13 @@ from app.modules.lifeos.service import (
     create_task as lifeos_create_task,
     list_tasks as lifeos_list_tasks,
     update_task as lifeos_update_task,
+)
+from app.modules.spendwise.schemas import TransactionCreate
+from app.modules.spendwise.service import (
+    create_transaction as spendwise_create_tx,
+    get_spend_summary as spendwise_get_summary,
+    list_budgets_with_progress as spendwise_list_budgets,
+    seed_demo_transactions_if_empty as spendwise_seed_demo,
 )
 
 
@@ -192,6 +199,91 @@ def _list_pending_drafts(_: dict[str, object], context: ToolContext) -> str:
     return "\n".join(lines)
 
 
+# --- SpendWise Tools ---
+def _log_expense(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    amount = arguments.get("amount")
+    if amount is None:
+        return "Amount is required."
+    try:
+        amt_float = float(amount)  # type: ignore[arg-type]
+        if amt_float <= 0:
+            return "Amount must be greater than zero."
+    except (ValueError, TypeError):
+        return "Invalid amount."
+
+    description = str(arguments.get("description", "")).strip()
+    if not description:
+        return "Description is required."
+
+    category = str(arguments.get("category", "Other")).strip() or "Other"
+    payment_method = str(arguments.get("payment_method", "Credit Card")).strip() or "Credit Card"
+
+    tx = spendwise_create_tx(
+        context.db,
+        context.user.id,
+        TransactionCreate(
+            amount=amt_float,
+            type="expense",
+            category=category,
+            description=description,
+            payment_method=payment_method,
+        ),
+    )
+    return (
+        f"Logged expense of ${tx.amount:.2f} for '{tx.description}' in '{tx.category}' "
+        f"via {tx.payment_method} (ID: {tx.id})."
+    )
+
+
+def _get_spending_summary(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    month = str(arguments["month"]).strip() if "month" in arguments and arguments["month"] else None
+    spendwise_seed_demo(context.db, context.user.id)
+    summary = spendwise_get_summary(context.db, context.user.id, month=month)
+
+    lines = [
+        f"Spending Summary for {summary.month}:",
+        f"- Total Income: ${summary.total_income:.2f}",
+        f"- Total Expenses: ${summary.total_expenses:.2f}",
+        f"- Net Savings: ${summary.net_savings:.2f} (Savings Rate: {summary.savings_rate}%)",
+        "- Top Categories:",
+    ]
+    for tc in summary.top_categories:
+        lines.append(f"  • {tc['category']}: ${float(tc['amount']):.2f}")
+    if summary.over_budget_count > 0:
+        lines.append(f"⚠️ Warning: You are over budget in {summary.over_budget_count} category/categories!")
+    return "\n".join(lines)
+
+
+def _check_budget_status(arguments: dict[str, object], context: ToolContext) -> str:
+    if not context.user or not context.db:
+        return "Authentication or database session is missing."
+    month = str(arguments["month"]).strip() if "month" in arguments and arguments["month"] else None
+    if not month:
+        month = date.today().strftime("%Y-%m")
+    spendwise_seed_demo(context.db, context.user.id)
+    budgets = spendwise_list_budgets(context.db, context.user.id, month=month)
+    if not budgets:
+        return f"No budgets configured for {month}."
+
+    lines = [f"Budget Status for {month}:"]
+    for b in budgets:
+        status_flag = (
+            "🚨 OVER BUDGET"
+            if b.spent > b.monthly_limit
+            else "⚠️ Close to Limit"
+            if b.percentage_used >= 80
+            else "✅ On Track"
+        )
+        lines.append(
+            f"- {b.category}: Spent ${b.spent:.2f} of ${b.monthly_limit:.2f} ({b.percentage_used}%) [{status_flag}]"
+        )
+    return "\n".join(lines)
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -311,6 +403,63 @@ TOOL_DEFINITIONS = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_expense",
+            "description": "Log an expense transaction in SpendWise with amount, description, and category.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number", "description": "The expense amount"},
+                    "description": {"type": "string", "description": "Short description of what was purchased"},
+                    "category": {
+                        "type": "string",
+                        "description": "Expense category (e.g. Food & Dining, Transportation, Shopping, Entertainment, Housing & Utilities, Healthcare, Other)",
+                    },
+                    "payment_method": {
+                        "type": "string",
+                        "description": "Payment method used (e.g. Credit Card, Debit Card, UPI, Cash)",
+                    },
+                },
+                "required": ["amount", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_spending_summary",
+            "description": "Get spending summary, savings rate, and category breakdown for a month in SpendWise.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "string",
+                        "description": "Month in YYYY-MM format (e.g. 2026-11). Defaults to current month.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_budget_status",
+            "description": "Check if user is on track or over budget in SpendWise.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "string",
+                        "description": "Month in YYYY-MM format (e.g. 2026-11). Defaults to current month.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -322,6 +471,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "search_emails": _search_emails,
     "draft_email_reply": _draft_email_reply,
     "list_pending_drafts": _list_pending_drafts,
+    "log_expense": _log_expense,
+    "get_spending_summary": _get_spending_summary,
+    "check_budget_status": _check_budget_status,
 }
 
 
