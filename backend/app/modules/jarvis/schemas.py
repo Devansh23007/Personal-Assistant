@@ -33,6 +33,7 @@ class JarvisCommandResponse(BaseModel):
     action_details: JarvisActionDetails | None = None
     system_status: JarvisTelemetryResponse | None = None
     audio_text: str | None = None
+    transcript: str | None = None
 
 
 class JarvisActionRequest(BaseModel):

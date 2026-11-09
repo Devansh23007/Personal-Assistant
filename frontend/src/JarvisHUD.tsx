@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-type JarvisStatus = "idle" | "listening" | "thinking" | "speaking";
+type JarvisStatus = "idle" | "armed" | "listening" | "thinking" | "speaking";
 
 interface Telemetry {
   cpu_percent: number | null;
@@ -127,13 +127,13 @@ function playAudioChime(type: "activate" | "confirm" | "alert") {
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.14);
+      gain.gain.setValueAtTime(0.14, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.24);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + 0.22);
+      osc.stop(ctx.currentTime + 0.24);
     } else if (type === "confirm") {
       [523.25, 659.25, 783.99].forEach((freq, idx) => {
         const osc = ctx.createOscillator();
@@ -164,7 +164,7 @@ function playAudioChime(type: "activate" | "confirm" | "alert") {
 }
 
 export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: string) => void } = {}) {
-  const [hudState, setHudState] = useState<JarvisStatus>("idle");
+  const [hudState, setHudState] = useState<JarvisStatus>("armed");
   const [isVoiceMuted, setIsVoiceMuted] = useState<boolean>(false);
   const [isWakeWordActive, setIsWakeWordActive] = useState<boolean>(true);
   const [micStatusMsg, setMicStatusMsg] = useState<string>("Standby active. Say 'Hey Jarvis' anytime.");
@@ -179,13 +179,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       id: "init",
       timestamp: new Date().toLocaleTimeString(),
       type: "jarvis",
-      text: "J.A.R.V.I.S. Core Online. All protocols active. Say 'Hey Jarvis' to command.",
+      text: "J.A.R.V.I.S. Core Online. Say 'Hey Jarvis' or click Core to talk.",
       actionTag: "SYSTEM_READY",
     },
   ]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const hudStateRef = useRef<JarvisStatus>("idle");
+  const hudStateRef = useRef<JarvisStatus>("armed");
   hudStateRef.current = hudState;
 
   const isWakeWordActiveRef = useRef<boolean>(true);
@@ -196,12 +196,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const recordedChunksRef = useRef<Float32Array[]>([]);
   const isCapturingRef = useRef<boolean>(false);
-  const captureModeRef = useRef<"wake" | "direct">("direct");
+  const captureModeRef = useRef<"wake" | "direct" | "interrupt">("direct");
   const hasSpokenRef = useRef<boolean>(false);
   const silenceFramesRef = useRef<number>(0);
   const totalFramesRef = useRef<number>(0);
   const ambientNoiseRef = useRef<number>(0.008);
   const audioLevelRef = useRef<number>(0);
+  const pendingTranscriptRef = useRef<string>("");
 
   // Ref to allow safe callback from Web Audio onaudioprocess
   const finalizeAudioRef = useRef<() => void>(() => {});
@@ -254,10 +255,26 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     return () => clearInterval(interval);
   }, []);
 
+  // Instantly Abort Speech (Stop talking)
+  const abortSpeechAndReset = () => {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    isCapturingRef.current = false;
+    recordedChunksRef.current = [];
+    setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+    setMicStatusMsg(
+      isWakeWordActiveRef.current
+        ? "Speech stopped, Sir. Standby active."
+        : "Speech stopped, Sir. Click Core to speak."
+    );
+    playAudioChime("alert");
+  };
+
   // Web Speech Synthesis (JARVIS voice)
   const speakReply = (text: string) => {
-    if (isVoiceMuted || !("speechSynthesis" in window)) {
-      setHudState("idle");
+    if (isVoiceMuted || !("speechSynthesis" in window) || !text.trim()) {
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       return;
     }
 
@@ -292,11 +309,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
     utterance.onstart = () => {
       setHudState("speaking");
-      setMicStatusMsg("Speaking directive response, Sir...");
+      setMicStatusMsg("Speaking directive response, Sir... (Click Core to stop)");
     };
 
     utterance.onend = () => {
-      setHudState("idle");
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
           ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -305,7 +322,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     };
 
     utterance.onerror = () => {
-      setHudState("idle");
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
           ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -316,10 +333,31 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     window.speechSynthesis.speak(utterance);
   };
 
+  // Put JARVIS into Active Listening state (Turns Core Green & starts recording command)
+  const startActiveCommandListening = (status = "🟢 J.A.R.V.I.S. ACTIVATED — listening for your command now.") => {
+    const ctx = getAudioContext();
+    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+
+    playAudioChime("activate");
+    recordedChunksRef.current = [];
+    hasSpokenRef.current = false;
+    silenceFramesRef.current = 0;
+    totalFramesRef.current = 0;
+    captureModeRef.current = "direct";
+    isCapturingRef.current = true;
+    setHudState("listening"); // TURNS CORE NEON GREEN!
+    setMicStatusMsg(status);
+  };
+
   // Submit Text Command to Backend
   const executeTextCommand = async (commandText: string) => {
     const trimmed = commandText.trim();
     if (!trimmed) return;
+
+    if (trimmed.toLowerCase() === "stop") {
+      abortSpeechAndReset();
+      return;
+    }
 
     const userLogId = Math.random().toString(36).substring(7);
     setLogs((prev) => [
@@ -379,7 +417,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           actionTag: "ERROR",
         },
       ]);
-      setHudState("idle");
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
           ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -389,9 +427,10 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   };
 
   // Transmit Audio to Backend (/api/jarvis/voice)
-  const transmitRecordedAudio = async (wavBlob: Blob, isWakeMode: boolean) => {
-    // Only flip HUD to thinking if direct command or once wake word is confirmed
-    if (!isWakeMode) {
+  const transmitRecordedAudio = async (wavBlob: Blob, mode: "wake" | "direct" | "interrupt") => {
+    const isWakeMode = mode === "wake";
+    const isInterruptMode = mode === "interrupt";
+    if (!isWakeMode && !isInterruptMode) {
       setHudState("thinking");
       setMicStatusMsg("Processing voice directive with Groq Whisper...");
     }
@@ -399,8 +438,12 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     try {
       const formData = new FormData();
       formData.append("file", wavBlob, "command.wav");
+      const continuation = mode === "direct" ? pendingTranscriptRef.current : "";
+      const continuationParam = continuation
+        ? `&continuation_text=${encodeURIComponent(continuation)}`
+        : "";
 
-      const res = await fetch(`/api/jarvis/voice?wake_mode=${isWakeMode ? "true" : "false"}`, {
+      const res = await fetch(`/api/jarvis/voice?wake_mode=${isWakeMode ? "true" : "false"}&interrupt_mode=${isInterruptMode ? "true" : "false"}${continuationParam}`, {
         method: "POST",
         body: formData,
       });
@@ -408,15 +451,50 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       if (!res.ok) throw new Error(`Voice server returned ${res.status}`);
       const data = await res.json();
 
-      // If in wake_mode and utterance was not directed at Jarvis (no 'Jarvis' found)
+      // A spoken stop is monitored while TTS is playing. Handle it before
+      // any normal response path so J.A.R.V.I.S. does not speak over it.
+      if (isInterruptMode) {
+        if (data.action_taken === "STOP_DIRECTIVE") abortSpeechAndReset();
+        return;
+      }
+
+      if (data.action_taken === "CONTINUE_LISTENING") {
+        pendingTranscriptRef.current = data.transcript || continuation;
+        startActiveCommandListening("🟢 Still listening — please finish your request.");
+        return;
+      }
+
+      // Case A: In wake_mode and utterance was not directed at Jarvis (no 'Jarvis' found)
       // Stay COMPLETELY silent and IDLE. Zero flicker, zero interruption!
       if (isWakeMode && data.action_taken === "WAKE_IGNORED") {
-        setHudState("idle");
+        pendingTranscriptRef.current = "";
+        setHudState("armed");
         setMicStatusMsg("Standby active. Say 'Hey Jarvis' anytime.");
         return;
       }
 
+      // Case B: User said ONLY "Hey Jarvis" -> AWAKEN & TURN GREEN IMMEDIATELY!
+      if (data.action_taken === "WAKE_CONFIRMED") {
+        pendingTranscriptRef.current = "";
+        const jarvisLogId = Math.random().toString(36).substring(7);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: jarvisLogId,
+            timestamp: new Date().toLocaleTimeString(),
+            type: "jarvis",
+            text: "Yes, Sir? Standing by for your directive.",
+            actionTag: "WAKE_CONFIRMED",
+          },
+        ]);
+
+        // Instantly transition into active listening without delay!
+        startActiveCommandListening();
+        return;
+      }
+
       if (data.action_taken === "NO_SPEECH_DETECTED") {
+        pendingTranscriptRef.current = "";
         if (!isWakeMode) {
           playAudioChime("alert");
           setLogs((prev) => [
@@ -430,7 +508,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             },
           ]);
         }
-        setHudState("idle");
+        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
         setMicStatusMsg(
           isWakeWordActiveRef.current
             ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -439,8 +517,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         return;
       }
 
-      // Confirmed Wake Word or Direct Command! Awaken Jarvis!
-      playAudioChime("activate");
+      // Case C: Direct command or "Hey Jarvis + [command]" executed!
+      pendingTranscriptRef.current = "";
+      playAudioChime("confirm");
 
       const jarvisLogId = Math.random().toString(36).substring(7);
       setLogs((prev) => [
@@ -458,6 +537,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
       speakReply(data.audio_text || data.reply);
     } catch (err: any) {
+      if (isInterruptMode) return;
       if (!isWakeMode) {
         playAudioChime("alert");
         setLogs((prev) => [
@@ -466,12 +546,12 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             id: Math.random().toString(36).substring(7),
             timestamp: new Date().toLocaleTimeString(),
             type: "jarvis",
-            text: `Voice processing notice: ${err.message || "Could not process audio"}.`,
+            text: `Voice notice: ${err.message || "Could not process audio"}.`,
             actionTag: "VOICE_ERROR",
           },
         ]);
       }
-      setHudState("idle");
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
           ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -480,7 +560,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     }
   };
 
-  // Finalize audio buffer and stop current capture immediately
+  // Finalize audio buffer and stop current capture
   const finalizeAudioAndSend = () => {
     if (!isCapturingRef.current) return;
     isCapturingRef.current = false;
@@ -491,7 +571,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     recordedChunksRef.current = [];
 
     if (chunks.length === 0 || (!hasSpokenRef.current && !isWake)) {
-      setHudState("idle");
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
           ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -514,7 +594,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     const sampleRate = ctx ? ctx.sampleRate : 44100;
     const wavBlob = encodeWav(mergedSamples, sampleRate);
 
-    transmitRecordedAudio(wavBlob, isWake);
+    transmitRecordedAudio(wavBlob, captureModeRef.current);
   };
 
   finalizeAudioRef.current = finalizeAudioAndSend;
@@ -561,8 +641,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         scriptProcessorRef.current = processor;
 
         processor.onaudioprocess = (e) => {
-          // Do not capture microphone while Jarvis is actively speaking or computing
-          if (hudStateRef.current === "speaking" || hudStateRef.current === "thinking") {
+          // Don't collect commands while a request is processing. During speech,
+          // keep a short VAD capture active so a spoken "stop" can interrupt TTS.
+          if (hudStateRef.current === "thinking") {
             return;
           }
 
@@ -578,28 +659,50 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           setLiveVolume(Math.min(100, Math.round(rms * 500)));
 
           // Dynamically track background noise floor smoothly
-          ambientNoiseRef.current = ambientNoiseRef.current * 0.92 + rms * 0.08;
+          ambientNoiseRef.current = ambientNoiseRef.current * 0.94 + rms * 0.06;
 
-          // Distinct speech trigger thresholds
-          const wakeSpeechThreshold = Math.max(0.022, ambientNoiseRef.current * 2.2);
-          const directSpeechThreshold = Math.max(0.015, ambientNoiseRef.current * 1.6);
-          const silenceThreshold = Math.max(0.012, ambientNoiseRef.current * 1.3);
+          // Calibrated speech trigger thresholds
+          const wakeSpeechThreshold = Math.max(0.020, ambientNoiseRef.current * 2.0);
+          const directSpeechThreshold = Math.max(0.014, ambientNoiseRef.current * 1.5);
+          const silenceThreshold = Math.max(0.010, ambientNoiseRef.current * 1.25);
+
+          if (hudStateRef.current === "speaking") {
+            if (!isCapturingRef.current && rms > directSpeechThreshold) {
+              isCapturingRef.current = true;
+              captureModeRef.current = "interrupt";
+              hasSpokenRef.current = true;
+              silenceFramesRef.current = 0;
+              totalFramesRef.current = 1;
+              recordedChunksRef.current = [new Float32Array(inputData)];
+              return;
+            }
+            if (isCapturingRef.current && captureModeRef.current === "interrupt") {
+              recordedChunksRef.current.push(new Float32Array(inputData));
+              totalFramesRef.current++;
+              if (rms > directSpeechThreshold) silenceFramesRef.current = 0;
+              else if (rms < silenceThreshold) silenceFramesRef.current++;
+              if (silenceFramesRef.current >= 8 || totalFramesRef.current >= 35) {
+                finalizeAudioRef.current();
+              }
+            }
+            return;
+          }
 
           // 1. Silent Hands-Free Wake-Word Standby Listening
-          // CRITICAL: Does NOT change HUD state or flicker to "listening" on room noise!
+          // Buffers silently in memory until "Hey Jarvis" is confirmed
           if (
             isWakeWordActiveRef.current &&
             !isCapturingRef.current &&
-            hudStateRef.current === "idle"
+            hudStateRef.current === "armed"
           ) {
             if (rms > wakeSpeechThreshold) {
-              // Speech detected in background: buffer silently without waking HUD yet
               isCapturingRef.current = true;
               captureModeRef.current = "wake";
               hasSpokenRef.current = true;
               silenceFramesRef.current = 0;
               totalFramesRef.current = 1;
               recordedChunksRef.current = [new Float32Array(inputData)];
+              setMicStatusMsg("Wake phrase detected — checking for 'Hey Jarvis'...");
             }
             return;
           }
@@ -615,34 +718,42 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             if (rms > currentSpeechThreshold) {
               hasSpokenRef.current = true;
               silenceFramesRef.current = 0;
+              if (captureModeRef.current === "direct") {
+                setMicStatusMsg("🎙️ Hearing your voice... Pause when finished or click Core.");
+              }
             } else if (rms < silenceThreshold) {
               if (hasSpokenRef.current) {
                 silenceFramesRef.current++;
               }
             }
 
-            // INSTANT STOP: ~0.8s of silence after speech (8 frames @ 93ms = 744ms)
-            const silenceFrameLimit = captureModeRef.current === "wake" ? 8 : 8;
+            // NATURAL SILENCE ENDPOINTING:
+            // Short acoustic hangover for the current batch-transcription flow.
+            // Smarter end-of-turn detection should replace this fixed threshold.
+            const silenceFrameLimit = captureModeRef.current === "wake" ? 10 : 18;
             if (hasSpokenRef.current && silenceFramesRef.current >= silenceFrameLimit) {
               finalizeAudioRef.current();
               return;
             }
 
-            // SAFETY MAX LIMIT: 5.5 seconds max ceiling so it NEVER hangs indefinitely
-            if (totalFramesRef.current >= 58) {
+            // SAFETY MAX LIMIT:
+            // Keep wake detection responsive; command clips can run for about 13 seconds.
+            const maxFrameLimit = captureModeRef.current === "wake" ? 35 : 140;
+            if (totalFramesRef.current >= maxFrameLimit) {
               finalizeAudioRef.current();
               return;
             }
 
-            // AUTO-CANCEL for Direct click if user did not speak for 3.5 seconds
+            // AUTO-CANCEL for Direct click if user did not speak for 4.5 seconds
             if (
               captureModeRef.current === "direct" &&
               !hasSpokenRef.current &&
-              totalFramesRef.current >= 38
+              totalFramesRef.current >= 48
             ) {
               isCapturingRef.current = false;
               recordedChunksRef.current = [];
-              setHudState("idle");
+              pendingTranscriptRef.current = "";
+              setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
               setMicStatusMsg(
                 isWakeWordActiveRef.current
                   ? "Standby active. Say 'Hey Jarvis' anytime."
@@ -676,23 +787,17 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
   // Toggle Push-To-Talk Voice Input (Core Click / Spacebar)
   const toggleVoiceInput = () => {
+    // If speaking, clicking the Core STOPS speech immediately!
+    if (hudStateRef.current === "speaking") {
+      abortSpeechAndReset();
+      return;
+    }
+
     if (isCapturingRef.current && captureModeRef.current === "direct") {
       // User clicked again: immediately stop and send!
       finalizeAudioAndSend();
     } else {
-      // Start explicit Push-to-Talk
-      const ctx = getAudioContext();
-      if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
-
-      playAudioChime("activate");
-      recordedChunksRef.current = [];
-      hasSpokenRef.current = false;
-      silenceFramesRef.current = 0;
-      totalFramesRef.current = 0;
-      captureModeRef.current = "direct";
-      isCapturingRef.current = true;
-      setHudState("listening");
-      setMicStatusMsg("Listening... Speak your directive clearly.");
+      startActiveCommandListening();
     }
   };
 
@@ -702,17 +807,23 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     setIsWakeWordActive(nextVal);
     isWakeWordActiveRef.current = nextVal;
     if (nextVal) {
+      setHudState("armed");
       setMicStatusMsg("Standby active. Say 'Hey Jarvis' anytime.");
       playAudioChime("confirm");
     } else {
+      if (hudStateRef.current === "armed") setHudState("idle");
       setMicStatusMsg("Wake word standby disabled. Click Core to speak.");
     }
   };
 
-  // Keyboard shortcut: Spacebar toggles voice input when not in text input
+  // Keyboard shortcut: Spacebar toggles voice input, Escape cancels/stops speech
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (e.code === "Escape") {
+        abortSpeechAndReset();
+        return;
+      }
       if (e.code === "Space" && activeTag !== "input" && activeTag !== "textarea") {
         e.preventDefault();
         toggleVoiceInput();
@@ -767,31 +878,31 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       }
 
       ctx.save();
-      ctx.shadowBlur = 14 + dynamicBoost;
+      ctx.shadowBlur = 16 + dynamicBoost;
       ctx.shadowColor = glowColor;
 
       // Outer Segmented Ring
       ctx.beginPath();
       ctx.arc(centerX, centerY, 150, 0, Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.15)";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = primaryColor + "0.2)";
+      ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Outer Rotating Arc Segments
+      // Outer Rotating Arc Segments (Turns Bright Green when Listening!)
       const segments = 12;
       for (let i = 0; i < segments; i++) {
         const segAngle = angle + (i * Math.PI * 2) / segments;
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 140, segAngle, segAngle + 0.28);
-        ctx.strokeStyle = primaryColor + (i % 2 === 0 ? "0.85)" : "0.35)");
-        ctx.lineWidth = 3;
+        ctx.arc(centerX, centerY, 140, segAngle, segAngle + 0.32);
+        ctx.strokeStyle = primaryColor + (i % 2 === 0 ? "0.95)" : "0.45)");
+        ctx.lineWidth = currentState === "listening" ? 4 : 3;
         ctx.stroke();
       }
 
       // Middle Ring with Tech Tick Marks
       ctx.beginPath();
       ctx.arc(centerX, centerY, 115, 0, Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.25)";
+      ctx.strokeStyle = primaryColor + "0.3)";
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
@@ -799,11 +910,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       for (let i = 0; i < numTicks; i++) {
         const tickAngle = -angle * 0.75 + (i * Math.PI * 2) / numTicks;
         const r1 = 110;
-        const r2 = i % 3 === 0 ? 122 + dynamicBoost * 0.3 : 116;
+        const r2 = i % 3 === 0 ? 124 + dynamicBoost * 0.35 : 116;
         ctx.beginPath();
         ctx.moveTo(centerX + Math.cos(tickAngle) * r1, centerY + Math.sin(tickAngle) * r1);
         ctx.lineTo(centerX + Math.cos(tickAngle) * r2, centerY + Math.sin(tickAngle) * r2);
-        ctx.strokeStyle = primaryColor + (i % 3 === 0 ? "0.8)" : "0.25)");
+        ctx.strokeStyle = primaryColor + (i % 3 === 0 ? "0.9)" : "0.3)");
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
@@ -813,19 +924,19 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         const bracketAngle = -angle * 1.2 + (i * Math.PI) / 2;
         ctx.beginPath();
         ctx.arc(centerX, centerY, 85, bracketAngle, bracketAngle + Math.PI / 4);
-        ctx.strokeStyle = primaryColor + "0.7)";
+        ctx.strokeStyle = primaryColor + "0.85)";
         ctx.lineWidth = 4;
         ctx.stroke();
       }
 
-      // Core Glowing Arc Reactor Center
+      // Core Glowing Arc Reactor Center (Vibrant pulsing glow)
       const coreRadius = Math.max(
-        30,
-        42 + pulseScale + (currentState === "speaking" ? Math.sin(pulse * 3) * 8 : 0)
+        32,
+        44 + pulseScale + (currentState === "speaking" ? Math.sin(pulse * 3) * 8 : 0)
       );
       const gradient = ctx.createRadialGradient(centerX, centerY, 5, centerX, centerY, coreRadius);
       gradient.addColorStop(0, primaryColor + "1)");
-      gradient.addColorStop(0.4, primaryColor + "0.55)");
+      gradient.addColorStop(0.45, primaryColor + "0.65)");
       gradient.addColorStop(1, primaryColor + "0)");
 
       ctx.beginPath();
@@ -835,8 +946,8 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
       // Center Core Dot
       ctx.beginPath();
-      ctx.arc(centerX, centerY, 14, 0, Math.PI * 2);
-      ctx.fillStyle = primaryColor + "0.95)";
+      ctx.arc(centerX, centerY, 15, 0, Math.PI * 2);
+      ctx.fillStyle = primaryColor + "1)";
       ctx.fill();
 
       ctx.restore();
@@ -912,6 +1023,17 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             {isWakeWordActive ? "🟢 WAKE WORD: ON" : "⚪ WAKE WORD: OFF"}
           </button>
 
+          {hudState === "speaking" && (
+            <button
+              type="button"
+              className="hud-toggle-btn muted"
+              onClick={abortSpeechAndReset}
+              title="Stop Speech Immediately (or press Escape / click Core)"
+            >
+              ⏹ STOP TALKING
+            </button>
+          )}
+
           <button
             type="button"
             className={`hud-toggle-btn ${isVoiceMuted ? "muted" : ""}`}
@@ -930,7 +1052,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           <div
             className="arc-reactor-wrapper"
             onClick={toggleVoiceInput}
-            title="Click to Talk / Spacebar"
+            title={hudState === "speaking" ? "Click to Stop Talking" : "Click to Talk / Spacebar"}
           >
             <canvas ref={canvasRef} className="arc-reactor-canvas" />
             <div className="arc-reactor-overlay">
@@ -938,12 +1060,14 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
                 {hudState.toUpperCase()}
               </span>
               <span className="core-hint">
-                {hudState === "listening"
-                  ? "LISTENING... (CLICK TO TRANSMIT)"
+                {hudState === "armed"
+                  ? "ARMED... SAY 'HEY JARVIS' TO ACTIVATE"
+                  : hudState === "listening"
+                  ? "J.A.R.V.I.S. ACTIVATED — SAY YOUR COMMAND"
                   : hudState === "thinking"
                   ? "COMPUTING WITH GROQ..."
                   : hudState === "speaking"
-                  ? "SPEAKING..."
+                  ? "SPEAKING... (CLICK TO STOP)"
                   : isWakeWordActive
                   ? "SAY 'HEY JARVIS' (OR CLICK TO TALK)"
                   : "CLICK TO TALK (OR PRESS SPACE)"}
@@ -1038,7 +1162,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             <span className="input-prompt">&gt;</span>
             <input
               type="text"
-              placeholder="Enter voice command or type directive here (e.g. 'check my system', 'open spotify', 'search for AI news')..."
+              placeholder="Enter voice command or type directive here (e.g. 'check my system', 'open spotify', 'stop')..."
               value={commandInput}
               onChange={(e) => setCommandInput(e.target.value)}
             />

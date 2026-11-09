@@ -279,13 +279,22 @@ async def process_jarvis_command(
             system_status=telemetry,
         )
 
+    # Stop / Quiet directive: abort any speech or action immediately
+    if lower in ("stop", "shut up", "be quiet", "silence", "quiet", "cancel", "pause", "halt", "abort", "stop talking"):
+        return JarvisCommandResponse(
+            reply="Standing by, Sir.",
+            action_taken="STOP_DIRECTIVE",
+            audio_text="",
+            system_status=telemetry,
+        )
+
     # 0. Wake Word or Greeting alone
     if not cleaned or lower in ("hello", "hi", "hey", "wake up", "are you there", "online", "status"):
-        reply = "At your service, Sir. All systems are operational. What can I do for you?"
+        reply = "At your service, Sir. Listening for your command."
         return JarvisCommandResponse(
             reply=reply,
             action_taken="WAKE_CONFIRMED",
-            audio_text="At your service, Sir. What can I do for you?",
+            audio_text="Yes, Sir?",
             system_status=telemetry,
         )
 

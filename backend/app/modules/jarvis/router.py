@@ -24,6 +24,43 @@ from app.modules.jarvis.service import (
 router = APIRouter(prefix="/jarvis", tags=["JARVIS Core"])
 
 
+def _needs_more_speech(text: str) -> bool:
+    """Hold obviously incomplete or very short ASR fragments for continuation."""
+    normalized = re.sub(r"[^\w\s']", " ", text.lower())
+    normalized = re.sub(r"^(?:hey\s+)?jarvis\s*[, ]*", "", normalized).strip()
+    words = normalized.split()
+    if not words:
+        return False
+
+    # These common short utterances are complete standalone commands or replies.
+    complete_short = {
+        "stop", "cancel", "pause", "mute", "unmute", "hello", "hi", "yes", "no",
+        "thanks", "thank you", "good morning", "good evening", "good afternoon",
+        "open chrome", "open youtube", "volume up", "volume down", "read notes",
+    }
+    if normalized in complete_short:
+        return False
+
+    # ASR can turn a breath or clipped syllable into a one-word transcript. Don't
+    # treat that as a complete request unless it is one of the commands above.
+    if len(words) <= 1:
+        return True
+
+    unfinished_endings = {
+        "a", "an", "the", "of", "to", "for", "with", "and", "or", "but",
+        "because", "if", "when", "where", "what", "which", "who", "why", "how",
+        "is", "are", "was", "were", "do", "does", "did", "can", "could",
+        "would", "should", "me", "about", "my", "your", "their", "its", "what's",
+    }
+    if words[-1].strip("'") in unfinished_endings:
+        return True
+
+    # Catch frequent partial questions whose last word alone is not a function word.
+    if re.search(r"\b(?:what(?:'s| is)|tell me)\s+(?:the\s+)?(?:capital|middle|population|weather|distance|meaning)$", normalized):
+        return True
+    return False
+
+
 @router.get("/telemetry", response_model=JarvisTelemetryResponse)
 def telemetry() -> JarvisTelemetryResponse:
     """Retrieve real-time PC diagnostic metrics (CPU, Memory, Battery, Host info)."""
@@ -49,13 +86,33 @@ async def handle_command(
 async def handle_voice_upload(
     file: UploadFile = File(...),
     wake_mode: bool = False,
+    interrupt_mode: bool = False,
+    continuation_text: str = "",
     user: Annotated[User, Depends(get_current_user)] = None,
     db: Annotated[Session, Depends(get_db)] = None,
 ) -> JarvisCommandResponse:
     """Accepts raw recorded WAV audio, transcribes it, and executes directive or filters wake word."""
     wav_bytes = await file.read()
     transcribed_text = transcribe_audio_bytes(wav_bytes)
+    if interrupt_mode:
+        normalized = re.sub(r"[^\w\s]", " ", transcribed_text.lower()).strip()
+        stop_command = re.match(
+            r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:stop(?:\s+talking)?|be\s+quiet|shut\s+up|silence|cancel|pause|halt|abort)$",
+            normalized,
+        )
+        return JarvisCommandResponse(
+            reply="" if not stop_command else "Stopped.",
+            action_taken="STOP_DIRECTIVE" if stop_command else "NO_STOP_DETECTED",
+            audio_text="",
+        )
     if not transcribed_text.strip():
+        if continuation_text.strip():
+            return JarvisCommandResponse(
+                reply="I didn't catch the next part. Please continue.",
+                action_taken="CONTINUE_LISTENING",
+                audio_text="",
+                transcript=continuation_text.strip(),
+            )
         return JarvisCommandResponse(
             reply="I couldn't hear any distinct directive, Sir. Please try speaking again.",
             audio_text="I couldn't hear you clearly, Sir.",
@@ -63,9 +120,11 @@ async def handle_voice_upload(
             system_status=get_system_telemetry(),
         )
 
+    combined_text = " ".join(part.strip() for part in (continuation_text, transcribed_text) if part.strip())
+
     # In wake_mode, check if the transcription contains "jarvis" or common phonetic variants
     if wake_mode:
-        lower_text = transcribed_text.lower()
+        lower_text = combined_text.lower()
         cleaned_for_wake = re.sub(r"[^\w\s]", " ", lower_text)
         wake_pattern = r"\b(jarvis|hey\s+jarvis|ok\s+jarvis|okay\s+jarvis|travis|service|harvis|javis|jarv)\b"
         if not re.search(wake_pattern, cleaned_for_wake) and "jarvis" not in cleaned_for_wake:
@@ -77,13 +136,21 @@ async def handle_voice_upload(
                 system_status=get_system_telemetry(),
             )
 
+    if _needs_more_speech(combined_text):
+        return JarvisCommandResponse(
+            reply="Go ahead, I'm listening.",
+            action_taken="CONTINUE_LISTENING",
+            audio_text="",
+            transcript=combined_text,
+        )
+
     resp = await process_jarvis_command(
-        message=transcribed_text,
+        message=combined_text,
         user=user,
         db=db,
         voice_mode=True,
     )
-    resp.reply = f"[Transcribed: \"{transcribed_text}\"]\n\n{resp.reply}"
+    resp.reply = f"[Transcribed: \"{combined_text}\"]\n\n{resp.reply}"
     return resp
 
 
