@@ -1,18 +1,28 @@
+import asyncio
+import io
+import json
 import re
+import urllib.error
+import urllib.request
+import wave
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.assistant.schemas import ChatMessage
 from app.modules.jarvis.schemas import (
     JarvisActionDetails,
     JarvisActionRequest,
     JarvisCommandRequest,
     JarvisCommandResponse,
     JarvisTelemetryResponse,
+    SpeechRequest,
 )
 from app.modules.jarvis.service import (
     execute_system_action,
@@ -61,6 +71,95 @@ def _needs_more_speech(text: str) -> bool:
     return False
 
 
+def _parse_history(raw_history: str) -> list[ChatMessage]:
+    try:
+        values = json.loads(raw_history)
+        if not isinstance(values, list):
+            return []
+        return [ChatMessage.model_validate(item) for item in values[-20:]]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+
+def _split_tts_text(text: str, max_chars: int = 190) -> list[str]:
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        remaining = sentence.strip()
+        while len(remaining) > max_chars:
+            split_at = remaining.rfind(" ", 0, max_chars + 1)
+            if split_at <= 0:
+                split_at = max_chars
+            piece, remaining = remaining[:split_at].strip(), remaining[split_at:].strip()
+            if current:
+                chunks.append(current)
+                current = ""
+            if piece:
+                chunks.append(piece)
+        if not remaining:
+            continue
+        candidate = f"{current} {remaining}".strip()
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = remaining
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _request_groq_speech(text: str, voice: str) -> bytes:
+    api_key = settings.tts_api_key or settings.llm_api_key
+    if not api_key:
+        raise RuntimeError("TTS API key is not configured")
+    payload = json.dumps({
+        "model": settings.tts_model,
+        "input": text,
+        "voice": voice,
+        "response_format": "wav",
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"{settings.tts_base_url.rstrip('/')}/audio/speech",
+        data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=45) as response:
+        return response.read()
+
+
+def _join_wav_audio(parts: list[bytes]) -> bytes:
+    audio_params: tuple[int, int, int, str, str] | None = None
+    frames: list[bytes] = []
+    for part in parts:
+        with wave.open(io.BytesIO(part), "rb") as reader:
+            current_params = (
+                reader.getnchannels(),
+                reader.getsampwidth(),
+                reader.getframerate(),
+                reader.getcomptype(),
+                reader.getcompname(),
+            )
+            if audio_params is not None and current_params != audio_params:
+                raise ValueError("Speech chunks have incompatible WAV formats")
+            audio_params = current_params
+            frames.append(reader.readframes(reader.getnframes()))
+    if audio_params is None:
+        raise ValueError("Speech provider returned no audio")
+
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(audio_params[0])
+        writer.setsampwidth(audio_params[1])
+        writer.setframerate(audio_params[2])
+        writer.setcomptype(audio_params[3], audio_params[4])
+        writer.writeframes(b"".join(frames))
+    return output.getvalue()
+
+
 @router.get("/telemetry", response_model=JarvisTelemetryResponse)
 def telemetry() -> JarvisTelemetryResponse:
     """Retrieve real-time PC diagnostic metrics (CPU, Memory, Battery, Host info)."""
@@ -79,6 +178,7 @@ async def handle_command(
         user=user,
         db=db,
         voice_mode=request.voice_mode,
+        history=request.history,
     )
 
 
@@ -88,12 +188,14 @@ async def handle_voice_upload(
     wake_mode: bool = False,
     interrupt_mode: bool = False,
     continuation_text: str = "",
+    history_json: str = Form(default="[]"),
     user: Annotated[User, Depends(get_current_user)] = None,
     db: Annotated[Session, Depends(get_db)] = None,
 ) -> JarvisCommandResponse:
     """Accepts raw recorded WAV audio, transcribes it, and executes directive or filters wake word."""
     wav_bytes = await file.read()
     transcribed_text = transcribe_audio_bytes(wav_bytes)
+    history = _parse_history(history_json)
     if interrupt_mode:
         if not transcribed_text.strip():
             return JarvisCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
@@ -124,6 +226,7 @@ async def handle_voice_upload(
             user=user,
             db=db,
             voice_mode=True,
+            history=history,
         )
         response.interrupted = True
         response.transcript = transcribed_text.strip()
@@ -173,9 +276,28 @@ async def handle_voice_upload(
         user=user,
         db=db,
         voice_mode=True,
+        history=history,
     )
+    resp.transcript = combined_text
     resp.reply = f"[Transcribed: \"{combined_text}\"]\n\n{resp.reply}"
     return resp
+
+
+@router.post("/speech", response_class=Response)
+async def synthesize_speech(request: SpeechRequest) -> Response:
+    """Generate natural English speech without exposing the provider key to the browser."""
+    if not (settings.tts_api_key or settings.llm_api_key):
+        raise HTTPException(status_code=503, detail="Natural speech is not configured.")
+    chunks = _split_tts_text(request.text)
+    try:
+        audio_parts = [
+            await asyncio.to_thread(_request_groq_speech, chunk, request.voice)
+            for chunk in chunks
+        ]
+        audio = _join_wav_audio(audio_parts)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, ValueError, wave.Error) as exc:
+        raise HTTPException(status_code=502, detail="Natural speech generation is unavailable.") from exc
+    return Response(content=audio, media_type="audio/wav")
 
 
 @router.post("/action", response_model=JarvisActionDetails)

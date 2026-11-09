@@ -1,11 +1,13 @@
 from typing import Any
 from pydantic import BaseModel, Field
+from app.modules.assistant.schemas import ChatMessage
 
 
 class JarvisCommandRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     voice_mode: bool = False
     client_time: str | None = None
+    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
 
 
 class JarvisActionDetails(BaseModel):
@@ -40,3 +42,8 @@ class JarvisCommandResponse(BaseModel):
 class JarvisActionRequest(BaseModel):
     action: str = Field(..., description="Action name, e.g. open_app, search_web, volume, lock")
     target: str | None = None
+
+
+class SpeechRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    voice: str = Field(default="troy", pattern="^(autumn|diana|hannah|austin|daniel|troy)$")

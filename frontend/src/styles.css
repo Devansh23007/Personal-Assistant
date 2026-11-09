@@ -904,3 +904,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.speech-voice-select {
+  align-self: center;
+  max-width: 190px;
+  overflow: hidden;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  border-radius: 6px;
+  color: #92e6f7;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 10px;
+  outline: none;
+  padding: 5px 8px;
+  text-overflow: ellipsis;
+}
+
+.speech-voice-select option {
+  background: #040810;
+  color: #c5e4f3;
+}

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "llama3.2:3b"
     whisper_model: str = "whisper-large-v3-turbo"
+    tts_api_key: str = ""
+    tts_base_url: str = "https://api.groq.com/openai/v1"
+    tts_model: str = "canopylabs/orpheus-v1-english"
 
     model_config = SettingsConfigDict(
         env_file=("backend/.env", ".env"),

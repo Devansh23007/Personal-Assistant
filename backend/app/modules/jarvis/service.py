@@ -208,6 +208,7 @@ async def process_jarvis_command(
     user: User,
     db: Session,
     voice_mode: bool = False,
+    history: list[ChatMessage] | None = None,
 ) -> JarvisCommandResponse:
     raw = message.strip()
     # Normalize common typos
@@ -370,15 +371,16 @@ async def process_jarvis_command(
 
     # 9. Conversational intelligence or complex task: Delegate to Assistant LLM
     jarvis_prompt = (
-        f"[You are J.A.R.V.I.S., a hyper-competent, refined AI assistant. Address the user as 'Sir'. "
-        f"Keep answers clear, polite, concise, and ready to be spoken aloud. "
+        f"[You are J.A.R.V.I.S., a warm, capable personal assistant. Speak naturally, like a thoughtful person in conversation. "
+        f"Use contractions and plain spoken English. Keep answers concise, with natural sentence rhythm. "
+        f"Avoid Markdown, bullet lists, headings, symbol-heavy formatting, and repetitive honorifics because answers are spoken aloud. "
         f"You can open locally installed desktop apps when asked, as well as use tools for tasks, emails, expenses, documents, flashcards, meals, and workflows. Only claim an app was opened when the tool confirms success.] "
         f"User command: {cleaned}"
     )
 
     try:
         context = ToolContext(user=user, db=db)
-        chat_req = ChatRequest(message=jarvis_prompt, history=[])
+        chat_req = ChatRequest(message=jarvis_prompt, history=history or [])
         llm_resp = await reply_to_chat(chat_req, context=context)
         return JarvisCommandResponse(
             reply=llm_resp.reply,

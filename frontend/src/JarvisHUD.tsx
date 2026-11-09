@@ -22,6 +22,58 @@ interface ActionLogItem {
   actionTag?: string;
 }
 
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function loadConversationHistory(): ConversationMessage[] {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("jarvisConversationHistory") || "[]");
+    if (!Array.isArray(saved)) return [];
+    return saved
+      .filter((item): item is ConversationMessage =>
+        item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string"
+      )
+      .slice(-20);
+  } catch {
+    return [];
+  }
+}
+
+function prepareSpeechText(rawText: string): string {
+  return rawText
+    .replace(/```[\s\S]*?```/g, " Code block omitted. ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/\*\*|__|~~|`|[*_#]/g, "")
+    .replace(/\s*--+\s*/g, ", ")
+    .replace(/[—–]/g, ", ")
+    .replace(/\b(?:e\.g\.|eg)\s*/gi, "for example ")
+    .replace(/\b(?:i\.e\.|ie)\s*/gi, "that is ")
+    .replace(/\bvs\.?\s/gi, "versus ")
+    .replace(/[|]/g, ", ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, ". ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/([,;])(?=\S)/g, "$1 ")
+    .trim();
+}
+
+function scoreSpeechVoice(voice: SpeechSynthesisVoice): number {
+  const language = voice.lang.toLowerCase().replace("_", "-");
+  const name = voice.name.toLowerCase();
+  let score = 0;
+  if (/natural|neural|online/.test(name)) score += 100;
+  if (/en-in/.test(language)) score += 30;
+  else if (/en-gb/.test(language)) score += 20;
+  else if (/en-us/.test(language)) score += 15;
+  else if (/^en/.test(language)) score += 10;
+  if (/compact|mobile/.test(name)) score -= 20;
+  return score;
+}
+
 // Global AudioContext singleton
 let sharedAudioCtx: AudioContext | null = null;
 function getAudioContext(): AudioContext | null {
@@ -172,6 +224,8 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const [activeMicLabel, setActiveMicLabel] = useState<string>("");
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>("ai:troy");
   const [liveVolume, setLiveVolume] = useState<number>(0);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [clock, setClock] = useState<string>("");
@@ -186,6 +240,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   ]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const naturalAudioRef = useRef<HTMLAudioElement | null>(null);
+  const naturalAudioUrlRef = useRef<string | null>(null);
+  const ttsRequestRef = useRef<AbortController | null>(null);
   const hudStateRef = useRef<JarvisStatus>("armed");
   hudStateRef.current = hudState;
 
@@ -206,10 +263,39 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const pendingTranscriptRef = useRef<string>("");
   const isConversationActiveRef = useRef<boolean>(false);
   const isBargeInPendingRef = useRef<boolean>(false);
+  const conversationHistoryRef = useRef<ConversationMessage[] | null>(null);
+  if (conversationHistoryRef.current === null) {
+    conversationHistoryRef.current = loadConversationHistory();
+  }
+
+  const rememberConversationTurn = (userText: string, assistantText: string) => {
+    const entries = conversationHistoryRef.current || [];
+    const next = [
+      ...entries,
+      { role: "user" as const, content: userText.trim() },
+      { role: "assistant" as const, content: assistantText.trim() },
+    ].filter((message) => message.content).slice(-20);
+    conversationHistoryRef.current = next;
+    try {
+      sessionStorage.setItem("jarvisConversationHistory", JSON.stringify(next));
+    } catch {
+      // Conversation remains available in memory for the current page session.
+    }
+  };
   const userSelectedMicRef = useRef<boolean>(false);
 
   // Ref to allow safe callback from Web Audio onaudioprocess
   const finalizeAudioRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const refreshVoices = () => {
+      setSpeechVoices(window.speechSynthesis.getVoices().filter((voice) => /^en([_-]|$)/i.test(voice.lang)));
+    };
+    refreshVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", refreshVoices);
+  }, []);
 
   // Real-time HUD Clock
   useEffect(() => {
@@ -273,10 +359,26 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   }, []);
 
   // Instantly Abort Speech (Stop talking)
-  const abortSpeechAndReset = () => {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+  const cancelSpeechOutput = () => {
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    ttsRequestRef.current?.abort();
+    ttsRequestRef.current = null;
+    if (naturalAudioRef.current) {
+      naturalAudioRef.current.onended = null;
+      naturalAudioRef.current.onerror = null;
+      naturalAudioRef.current.pause();
+      naturalAudioRef.current.removeAttribute("src");
+      naturalAudioRef.current.load();
+      naturalAudioRef.current = null;
     }
+    if (naturalAudioUrlRef.current) {
+      URL.revokeObjectURL(naturalAudioUrlRef.current);
+      naturalAudioUrlRef.current = null;
+    }
+  };
+
+  const abortSpeechAndReset = () => {
+    cancelSpeechOutput();
     isCapturingRef.current = false;
     recordedChunksRef.current = [];
     if (isConversationActiveRef.current) {
@@ -293,76 +395,123 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     playAudioChime("alert");
   };
 
-  // Web Speech Synthesis (JARVIS voice)
-  const speakReply = (text: string) => {
-    if (isVoiceMuted || !("speechSynthesis" in window) || !text.trim()) {
+  const finishSpeechPlayback = () => {
+    if (isBargeInPendingRef.current) return;
+    if (isConversationActiveRef.current) {
+      startConversationListening();
+    } else {
       setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+      setMicStatusMsg(
+        isWakeWordActiveRef.current
+          ? "Standby active. Say 'Jarvis' anytime."
+          : "Click Core or press Space to speak."
+      );
+    }
+  };
+
+  const speakWithSystemVoice = (cleanText: string) => {
+    if (!("speechSynthesis" in window)) {
+      finishSpeechPlayback();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    const voices = window.speechSynthesis.getVoices();
+    const englishVoices = voices.filter((voice) => /^en([_-]|$)/i.test(voice.lang));
+    const nativeURI = selectedVoiceURI.startsWith("native:")
+      ? selectedVoiceURI.slice("native:".length)
+      : "";
+    const chosenVoice =
+      englishVoices.find((voice) => voice.voiceURI === nativeURI) ||
+      [...englishVoices].sort((a, b) => scoreSpeechVoice(b) - scoreSpeechVoice(a))[0];
+    if (chosenVoice) {
+      utterance.voice = chosenVoice;
+      utterance.lang = chosenVoice.lang;
+    }
+    utterance.pitch = 1;
+    utterance.rate = 0.96;
+    utterance.volume = 1;
+    utterance.onstart = () => {
+      setHudState("speaking");
+      setMicStatusMsg("Speaking response...");
+    };
+    utterance.onend = finishSpeechPlayback;
+    utterance.onerror = finishSpeechPlayback;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Use Groq's neural Orpheus voice by default; fall back to the selected system voice.
+  const speakReply = async (text: string) => {
+    const cleanText = prepareSpeechText(text).slice(0, 4000).trim();
+    if (isVoiceMuted || !cleanText) {
+      finishSpeechPlayback();
       return;
     }
 
-    window.speechSynthesis.cancel();
-    const cleanText = text.replace(/[*#`_\[\]]/g, "").trim();
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-
-    const voices = window.speechSynthesis.getVoices();
-    const britishVoice = voices.find(
-      (v) =>
-        (v.lang.includes("en-GB") || v.lang.includes("en_GB")) &&
-        (v.name.toLowerCase().includes("george") ||
-          v.name.toLowerCase().includes("male") ||
-          v.name.toLowerCase().includes("daniel"))
-    );
-    const englishMale = voices.find(
-      (v) =>
-        v.lang.startsWith("en") &&
-        (v.name.toLowerCase().includes("male") ||
-          v.name.toLowerCase().includes("david") ||
-          v.name.toLowerCase().includes("mark"))
-    );
-
-    if (britishVoice) {
-      utterance.voice = britishVoice;
-    } else if (englishMale) {
-      utterance.voice = englishMale;
+    cancelSpeechOutput();
+    if (!selectedVoiceURI.startsWith("ai:")) {
+      speakWithSystemVoice(cleanText);
+      return;
     }
 
-    utterance.pitch = 0.95;
-    utterance.rate = 1.05;
-
-    utterance.onstart = () => {
-      setHudState("speaking");
-      setMicStatusMsg("Speaking directive response, Sir... (Click Core to stop)");
+    const controller = new AbortController();
+    ttsRequestRef.current = controller;
+    setHudState("speaking");
+    setMicStatusMsg("Preparing natural voice...");
+    let fallbackUsed = false;
+    const fallback = () => {
+      if (fallbackUsed || controller.signal.aborted) return;
+      fallbackUsed = true;
+      ttsRequestRef.current = null;
+      setMicStatusMsg("Natural voice unavailable; using the system voice.");
+      speakWithSystemVoice(cleanText);
     };
 
-    utterance.onend = () => {
-      if (isBargeInPendingRef.current) return;
-      if (isConversationActiveRef.current) {
-        startConversationListening();
-      } else {
-        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-        setMicStatusMsg(
-          isWakeWordActiveRef.current
-            ? "Standby active. Say 'Jarvis' anytime."
-            : "Click Core or press Space to speak."
-        );
+    try {
+      const response = await fetch("/api/jarvis/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: cleanText, voice: selectedVoiceURI.slice(3) }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Speech provider returned ${response.status}`);
+      const audioBlob = await response.blob();
+      if (controller.signal.aborted) return;
+
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      naturalAudioUrlRef.current = audioUrl;
+      naturalAudioRef.current = audio;
+      const releaseAudio = () => {
+        if (naturalAudioRef.current === audio) naturalAudioRef.current = null;
+        if (naturalAudioUrlRef.current === audioUrl) {
+          URL.revokeObjectURL(audioUrl);
+          naturalAudioUrlRef.current = null;
+        }
+        ttsRequestRef.current = null;
+      };
+      audio.onended = () => {
+        releaseAudio();
+        finishSpeechPlayback();
+      };
+      audio.onerror = () => {
+        releaseAudio();
+        fallback();
+      };
+      await audio.play();
+    } catch {
+      if (controller.signal.aborted) return;
+      if (naturalAudioRef.current) {
+        naturalAudioRef.current.onended = null;
+        naturalAudioRef.current.onerror = null;
+        naturalAudioRef.current = null;
       }
-    };
-
-    utterance.onerror = () => {
-      if (isBargeInPendingRef.current) return;
-      if (isConversationActiveRef.current) {
-        startConversationListening();
-      } else {
-        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-        setMicStatusMsg(
-          isWakeWordActiveRef.current
-            ? "Standby active. Say 'Jarvis' anytime."
-            : "Click Core or press Space to speak."
-        );
+      if (naturalAudioUrlRef.current) {
+        URL.revokeObjectURL(naturalAudioUrlRef.current);
+        naturalAudioUrlRef.current = null;
       }
-    };
-
-    window.speechSynthesis.speak(utterance);
+      fallback();
+    }
   };
 
   // Put JARVIS into Active Listening state (Turns Core Green & starts recording command)
@@ -423,7 +572,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       const res = await fetch("/api/jarvis/command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, voice_mode: false }),
+        body: JSON.stringify({
+          message: trimmed,
+          voice_mode: false,
+          history: conversationHistoryRef.current || [],
+        }),
       });
 
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
@@ -443,6 +596,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       ]);
 
       if (data.system_status) setTelemetry(data.system_status);
+      rememberConversationTurn(trimmed, data.audio_text || data.reply);
 
       const lower = trimmed.toLowerCase();
       if (lower.includes("show tasks") || lower.includes("open lifeos")) {
@@ -483,6 +637,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     try {
       const formData = new FormData();
       formData.append("file", wavBlob, "command.wav");
+      formData.append("history_json", JSON.stringify(conversationHistoryRef.current || []));
       const continuation = mode === "direct" ? pendingTranscriptRef.current : "";
       const continuationParam = continuation
         ? `&continuation_text=${encodeURIComponent(continuation)}`
@@ -600,6 +755,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       // Case C: Direct command or "Hey Jarvis + [command]" executed!
       pendingTranscriptRef.current = "";
       isConversationActiveRef.current = true;
+      const userTurn = String(data.transcript || "").trim();
+      const assistantTurn = String(data.audio_text || data.reply || "").trim();
+      if (userTurn && assistantTurn) rememberConversationTurn(userTurn, assistantTurn);
       playAudioChime("confirm");
 
       const jarvisLogId = Math.random().toString(36).substring(7);
@@ -789,7 +947,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               recordedChunksRef.current = [new Float32Array(inputData)];
               isBargeInPendingRef.current = true;
               setMicStatusMsg("I heard you. Interrupting my response...");
-              if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+              cancelSpeechOutput();
               return;
             }
             if (isCapturingRef.current && captureModeRef.current === "interrupt") {
@@ -1168,6 +1326,33 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           <span className="active-mic-label" title={`Active input: ${activeMicLabel || "Detecting microphone"}`}>
             MIC: {activeMicLabel || "DETECTING..."}
           </span>
+
+          <select
+            className="speech-voice-select"
+            value={selectedVoiceURI}
+            onChange={(event) => setSelectedVoiceURI(event.target.value)}
+            title="Choose J.A.R.V.I.S.'s speaking voice"
+          >
+            <optgroup label="Natural AI voices">
+              <option value="ai:troy">AI Natural — Troy</option>
+              <option value="ai:daniel">AI Natural — Daniel</option>
+              <option value="ai:austin">AI Natural — Austin</option>
+              <option value="ai:autumn">AI Natural — Autumn</option>
+              <option value="ai:diana">AI Natural — Diana</option>
+              <option value="ai:hannah">AI Natural — Hannah</option>
+            </optgroup>
+            {speechVoices.length > 0 && (
+              <optgroup label="System voices">
+                {[...speechVoices]
+                  .sort((a, b) => scoreSpeechVoice(b) - scoreSpeechVoice(a))
+                  .map((voice) => (
+                    <option key={voice.voiceURI} value={`native:${voice.voiceURI}`}>
+                      {voice.name} ({voice.lang})
+                    </option>
+                  ))}
+              </optgroup>
+            )}
+          </select>
 
           <button
             type="button"
