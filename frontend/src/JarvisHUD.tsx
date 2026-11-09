@@ -171,6 +171,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const [commandInput, setCommandInput] = useState<string>("");
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [activeMicLabel, setActiveMicLabel] = useState<string>("");
   const [liveVolume, setLiveVolume] = useState<number>(0);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [clock, setClock] = useState<string>("");
@@ -203,6 +204,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const ambientNoiseRef = useRef<number>(0.008);
   const audioLevelRef = useRef<number>(0);
   const pendingTranscriptRef = useRef<string>("");
+  const isConversationActiveRef = useRef<boolean>(false);
+  const isBargeInPendingRef = useRef<boolean>(false);
+  const userSelectedMicRef = useRef<boolean>(false);
 
   // Ref to allow safe callback from Web Audio onaudioprocess
   const finalizeAudioRef = useRef<() => void>(() => {});
@@ -222,22 +226,35 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     return () => clearInterval(interval);
   }, []);
 
-  // Enumerate Microphones (Auto-select earphones/headset if connected)
+  // Enumerate microphones. Labels are often hidden until getUserMedia grants
+  // permission, so actual headset selection happens after the first stream opens.
   useEffect(() => {
-    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-      navigator.mediaDevices.enumerateDevices().then((devices) => {
-        const mics = devices.filter((d) => d.kind === "audioinput");
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+
+    let disposed = false;
+    const refreshDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (disposed) return;
+        const mics = devices.filter((device) => device.kind === "audioinput");
         setAudioDevices(mics);
-        const headset = mics.find((m) =>
-          /headset|earphone|headphone|bluetooth|airpod|usb/i.test(m.label)
+        const headset = mics.find((mic) =>
+          /headset|earphone|headphone|bluetooth|airpod|hands.?free|\busb\b/i.test(mic.label)
         );
-        if (headset) {
+        if (headset && !userSelectedMicRef.current) {
           setSelectedDeviceId(headset.deviceId);
-        } else if (mics.length > 0) {
-          setSelectedDeviceId(mics[0].deviceId);
         }
-      }).catch(() => {});
-    }
+      } catch {
+        // The microphone setup below reports permission and device errors.
+      }
+    };
+
+    void refreshDevices();
+    navigator.mediaDevices.addEventListener?.("devicechange", refreshDevices);
+    return () => {
+      disposed = true;
+      navigator.mediaDevices.removeEventListener?.("devicechange", refreshDevices);
+    };
   }, []);
 
   // Poll Telemetry
@@ -262,12 +279,17 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     }
     isCapturingRef.current = false;
     recordedChunksRef.current = [];
-    setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-    setMicStatusMsg(
-      isWakeWordActiveRef.current
-        ? "Speech stopped, Sir. Standby active."
-        : "Speech stopped, Sir. Click Core to speak."
-    );
+    if (isConversationActiveRef.current) {
+      setHudState("listening");
+      setMicStatusMsg("Speech stopped. I'm still listening for your next request.");
+    } else {
+      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+      setMicStatusMsg(
+        isWakeWordActiveRef.current
+          ? "Speech stopped, Sir. Standby active."
+          : "Speech stopped, Sir. Click Core to speak."
+      );
+    }
     playAudioChime("alert");
   };
 
@@ -313,21 +335,31 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     };
 
     utterance.onend = () => {
-      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-      setMicStatusMsg(
-        isWakeWordActiveRef.current
-          ? "Standby active. Say 'Hey Jarvis' anytime."
-          : "Click Core or press Space to speak."
-      );
+      if (isBargeInPendingRef.current) return;
+      if (isConversationActiveRef.current) {
+        startConversationListening();
+      } else {
+        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+        setMicStatusMsg(
+          isWakeWordActiveRef.current
+            ? "Standby active. Say 'Jarvis' anytime."
+            : "Click Core or press Space to speak."
+        );
+      }
     };
 
     utterance.onerror = () => {
-      setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-      setMicStatusMsg(
-        isWakeWordActiveRef.current
-          ? "Standby active. Say 'Hey Jarvis' anytime."
-          : "Click Core or press Space to speak."
-      );
+      if (isBargeInPendingRef.current) return;
+      if (isConversationActiveRef.current) {
+        startConversationListening();
+      } else {
+        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+        setMicStatusMsg(
+          isWakeWordActiveRef.current
+            ? "Standby active. Say 'Jarvis' anytime."
+            : "Click Core or press Space to speak."
+        );
+      }
     };
 
     window.speechSynthesis.speak(utterance);
@@ -344,9 +376,22 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     silenceFramesRef.current = 0;
     totalFramesRef.current = 0;
     captureModeRef.current = "direct";
+    isConversationActiveRef.current = true;
     isCapturingRef.current = true;
     setHudState("listening"); // TURNS CORE NEON GREEN!
     setMicStatusMsg(status);
+  };
+
+  // Leave the mic armed for the next turn without buffering silence.
+  const startConversationListening = () => {
+    recordedChunksRef.current = [];
+    hasSpokenRef.current = false;
+    silenceFramesRef.current = 0;
+    totalFramesRef.current = 0;
+    captureModeRef.current = "direct";
+    isCapturingRef.current = false;
+    setHudState("listening");
+    setMicStatusMsg("🟢 J.A.R.V.I.S. is listening. Continue speaking, or say 'stop listening' to leave conversation mode.");
   };
 
   // Submit Text Command to Backend
@@ -454,8 +499,31 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       // A spoken stop is monitored while TTS is playing. Handle it before
       // any normal response path so J.A.R.V.I.S. does not speak over it.
       if (isInterruptMode) {
-        if (data.action_taken === "STOP_DIRECTIVE") abortSpeechAndReset();
-        return;
+        isBargeInPendingRef.current = false;
+        if (data.interrupted) {
+          isConversationActiveRef.current = true;
+          setHudState("thinking");
+          setMicStatusMsg("I heard you. Let me answer that...");
+          if (data.transcript) {
+            setLogs((prev) => [
+              ...prev,
+              {
+                id: Math.random().toString(36).substring(7),
+                timestamp: new Date().toLocaleTimeString(),
+                type: "user",
+                text: data.transcript,
+              },
+            ]);
+          }
+        } else {
+          if (data.action_taken === "STOP_LISTENING") isConversationActiveRef.current = false;
+          if (data.action_taken === "STOP_DIRECTIVE" || data.action_taken === "STOP_LISTENING") {
+            abortSpeechAndReset();
+          } else if (isConversationActiveRef.current) {
+            startConversationListening();
+          }
+          return;
+        }
       }
 
       if (data.action_taken === "CONTINUE_LISTENING") {
@@ -517,8 +585,21 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         return;
       }
 
+      if (data.action_taken === "STOP_DIRECTIVE") {
+        isConversationActiveRef.current = false;
+        if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+        setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+        setMicStatusMsg(
+          isWakeWordActiveRef.current
+            ? "Conversation ended. Say 'Jarvis' to start again."
+            : "Conversation ended. Click Core or press Space to start again."
+        );
+        return;
+      }
+
       // Case C: Direct command or "Hey Jarvis + [command]" executed!
       pendingTranscriptRef.current = "";
+      isConversationActiveRef.current = true;
       playAudioChime("confirm");
 
       const jarvisLogId = Math.random().toString(36).substring(7);
@@ -537,7 +618,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
       speakReply(data.audio_text || data.reply);
     } catch (err: any) {
-      if (isInterruptMode) return;
+      if (isInterruptMode) {
+        isBargeInPendingRef.current = false;
+        if (isConversationActiveRef.current) startConversationListening();
+        return;
+      }
       if (!isWakeMode) {
         playAudioChime("alert");
         setLogs((prev) => [
@@ -566,7 +651,8 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     isCapturingRef.current = false;
     audioLevelRef.current = 0;
 
-    const isWake = captureModeRef.current === "wake";
+    const mode = captureModeRef.current;
+    const isWake = mode === "wake";
     const chunks = recordedChunksRef.current;
     recordedChunksRef.current = [];
 
@@ -594,7 +680,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     const sampleRate = ctx ? ctx.sampleRate : 44100;
     const wavBlob = encodeWav(mergedSamples, sampleRate);
 
-    transmitRecordedAudio(wavBlob, captureModeRef.current);
+    if (mode === "interrupt") {
+      setHudState("thinking");
+      setMicStatusMsg("Processing your interruption...");
+    }
+    transmitRecordedAudio(wavBlob, mode);
   };
 
   finalizeAudioRef.current = finalizeAudioAndSend;
@@ -636,6 +726,28 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         }
 
         audioStreamRef.current = stream;
+        const activeTrack = stream.getAudioTracks()[0];
+        const activeSettings = activeTrack?.getSettings();
+        const activeLabel = activeTrack?.label || "Default microphone";
+        setActiveMicLabel(activeLabel);
+
+        // Permission reveals real device labels. Prefer a named headset when
+        // available; otherwise pin the device the browser actually opened.
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const mics = devices.filter((device) => device.kind === "audioinput");
+          setAudioDevices(mics);
+          if (!userSelectedMicRef.current) {
+            const headset = mics.find((mic) =>
+              /headset|earphone|headphone|bluetooth|airpod|hands.?free|\busb\b/i.test(mic.label)
+            );
+            const preferredDeviceId = headset?.deviceId || activeSettings?.deviceId;
+            if (preferredDeviceId) setSelectedDeviceId(preferredDeviceId);
+          }
+        } catch {
+          // Keep the active stream; the device selector can still be used manually.
+        }
+
         const source = ctx.createMediaStreamSource(stream);
         const processor = ctx.createScriptProcessor(4096, 1, 1);
         scriptProcessorRef.current = processor;
@@ -664,26 +776,49 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           // Calibrated speech trigger thresholds
           const wakeSpeechThreshold = Math.max(0.020, ambientNoiseRef.current * 2.0);
           const directSpeechThreshold = Math.max(0.014, ambientNoiseRef.current * 1.5);
+          const interruptSpeechThreshold = Math.max(0.008, ambientNoiseRef.current * 1.3);
           const silenceThreshold = Math.max(0.010, ambientNoiseRef.current * 1.25);
 
           if (hudStateRef.current === "speaking") {
-            if (!isCapturingRef.current && rms > directSpeechThreshold) {
+            if (!isCapturingRef.current && rms > interruptSpeechThreshold) {
               isCapturingRef.current = true;
               captureModeRef.current = "interrupt";
               hasSpokenRef.current = true;
               silenceFramesRef.current = 0;
               totalFramesRef.current = 1;
               recordedChunksRef.current = [new Float32Array(inputData)];
+              isBargeInPendingRef.current = true;
+              setMicStatusMsg("I heard you. Interrupting my response...");
+              if ("speechSynthesis" in window) window.speechSynthesis.cancel();
               return;
             }
             if (isCapturingRef.current && captureModeRef.current === "interrupt") {
               recordedChunksRef.current.push(new Float32Array(inputData));
               totalFramesRef.current++;
-              if (rms > directSpeechThreshold) silenceFramesRef.current = 0;
+              if (rms > interruptSpeechThreshold) silenceFramesRef.current = 0;
               else if (rms < silenceThreshold) silenceFramesRef.current++;
-              if (silenceFramesRef.current >= 8 || totalFramesRef.current >= 35) {
+              if (silenceFramesRef.current >= 4 || totalFramesRef.current >= 140) {
                 finalizeAudioRef.current();
               }
+            }
+            return;
+          }
+
+          // In conversation mode, wait for speech onset without recording silence.
+          if (
+            isConversationActiveRef.current &&
+            hudStateRef.current === "listening" &&
+            !isCapturingRef.current
+          ) {
+            const conversationThreshold = Math.max(0.009, ambientNoiseRef.current * 1.35);
+            if (rms > conversationThreshold) {
+              isCapturingRef.current = true;
+              captureModeRef.current = "direct";
+              hasSpokenRef.current = true;
+              silenceFramesRef.current = 0;
+              totalFramesRef.current = 1;
+              recordedChunksRef.current = [new Float32Array(inputData)];
+              setMicStatusMsg("🎙️ Hearing you — speak naturally; I’m following the conversation.");
             }
             return;
           }
@@ -712,8 +847,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             recordedChunksRef.current.push(new Float32Array(inputData));
             totalFramesRef.current++;
 
-            const currentSpeechThreshold =
-              captureModeRef.current === "wake" ? wakeSpeechThreshold : directSpeechThreshold;
+            const currentSpeechThreshold = captureModeRef.current === "wake"
+              ? wakeSpeechThreshold
+              : captureModeRef.current === "interrupt"
+              ? interruptSpeechThreshold
+              : directSpeechThreshold;
 
             if (rms > currentSpeechThreshold) {
               hasSpokenRef.current = true;
@@ -753,12 +891,17 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               isCapturingRef.current = false;
               recordedChunksRef.current = [];
               pendingTranscriptRef.current = "";
-              setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
-              setMicStatusMsg(
-                isWakeWordActiveRef.current
-                  ? "Standby active. Say 'Hey Jarvis' anytime."
-                  : "Click Core or press Space to Speak."
-              );
+              if (isConversationActiveRef.current) {
+                setHudState("listening");
+                setMicStatusMsg("I’m still listening. Say your request whenever you’re ready.");
+              } else {
+                setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+                setMicStatusMsg(
+                  isWakeWordActiveRef.current
+                    ? "Standby active. Say 'Jarvis' anytime."
+                    : "Click Core or press Space to Speak."
+                );
+              }
             }
           }
         };
@@ -767,6 +910,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         processor.connect(ctx.destination);
       } catch (err) {
         console.warn("Microphone initialization notice:", err);
+        if (isCancelled) return;
+        setActiveMicLabel("Microphone unavailable");
+        setMicStatusMsg("Microphone unavailable. Check browser permission and select an input device.");
       }
     };
 
@@ -1003,9 +1149,15 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             <select
               className="mic-select-dropdown"
               value={selectedDeviceId}
-              onChange={(e) => setSelectedDeviceId(e.target.value)}
+              onChange={(e) => {
+                userSelectedMicRef.current = true;
+                setSelectedDeviceId(e.target.value);
+                const selected = audioDevices.find((device) => device.deviceId === e.target.value);
+                setMicStatusMsg(`Switching microphone to ${selected?.label || "selected input"}...`);
+              }}
               title="Select Microphone Input Device"
             >
+              <option value="" disabled>Choose microphone</option>
               {audioDevices.map((d, i) => (
                 <option key={d.deviceId || i} value={d.deviceId}>
                   🎙️ {d.label || `Microphone ${i + 1}`}
@@ -1013,6 +1165,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               ))}
             </select>
           )}
+          <span className="active-mic-label" title={`Active input: ${activeMicLabel || "Detecting microphone"}`}>
+            MIC: {activeMicLabel || "DETECTING..."}
+          </span>
 
           <button
             type="button"

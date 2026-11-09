@@ -5,6 +5,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.core.app_launcher import launch_desktop_app
 from app.modules.auth.models import User
 from app.modules.autoflow.service import (
     execute_workflow as autoflow_execute,
@@ -69,6 +70,12 @@ ToolHandler = Callable[[dict[str, object], ToolContext], str]
 def _local_date(_: dict[str, object], __: ToolContext) -> str:
     now = datetime.now().astimezone()
     return now.strftime("%A, %B %d, %Y %H:%M %Z")
+
+
+def _open_desktop_app(arguments: dict[str, object], _: ToolContext) -> str:
+    app_name = str(arguments.get("app_name", "")).strip()
+    success, message = launch_desktop_app(app_name)
+    return message if success else f"I couldn't open that app. {message}"
 
 
 # --- LifeOS Tools ---
@@ -505,6 +512,20 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "open_desktop_app",
+            "description": "Open a locally installed desktop application on the user's computer by its Start menu name, such as Chrome, Word, Spotify, Notepad, or Calculator. Use this when the user asks to open or launch an app. If it is not installed or cannot be found, report that clearly and do not claim success.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string", "description": "The installed application name to open"},
+                },
+                "required": ["app_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_server_date",
             "description": "Get the current date and time on the application server.",
             "parameters": {"type": "object", "properties": {}, "required": []},
@@ -799,6 +820,7 @@ TOOL_DEFINITIONS = [
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
+    "open_desktop_app": _open_desktop_app,
     "get_server_date": _local_date,
     "list_my_tasks": _list_tasks,
     "create_task": _create_task,

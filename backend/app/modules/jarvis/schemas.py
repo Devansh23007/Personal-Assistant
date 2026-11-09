@@ -34,6 +34,7 @@ class JarvisCommandResponse(BaseModel):
     system_status: JarvisTelemetryResponse | None = None
     audio_text: str | None = None
     transcript: str | None = None
+    interrupted: bool = False
 
 
 class JarvisActionRequest(BaseModel):

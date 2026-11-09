@@ -893,3 +893,14 @@
   background: #040810;
   color: #c5e4f3;
 }
+
+.active-mic-label {
+  align-self: center;
+  max-width: 190px;
+  overflow: hidden;
+  color: #8ca4b4;
+  font-family: monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

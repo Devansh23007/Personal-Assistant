@@ -95,16 +95,40 @@ async def handle_voice_upload(
     wav_bytes = await file.read()
     transcribed_text = transcribe_audio_bytes(wav_bytes)
     if interrupt_mode:
+        if not transcribed_text.strip():
+            return JarvisCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
         normalized = re.sub(r"[^\w\s]", " ", transcribed_text.lower()).strip()
+        stop_listening = re.match(
+            r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:stop listening|end conversation|go to standby)$",
+            normalized,
+        )
         stop_command = re.match(
             r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:stop(?:\s+talking)?|be\s+quiet|shut\s+up|silence|cancel|pause|halt|abort)$",
             normalized,
         )
-        return JarvisCommandResponse(
-            reply="" if not stop_command else "Stopped.",
-            action_taken="STOP_DIRECTIVE" if stop_command else "NO_STOP_DETECTED",
-            audio_text="",
+        if stop_listening or stop_command:
+            return JarvisCommandResponse(
+                reply="Stopped.",
+                action_taken="STOP_LISTENING" if stop_listening else "STOP_DIRECTIVE",
+                audio_text="",
+                transcript=transcribed_text.strip(),
+            )
+
+        # Ignore tiny fragments that are likely to be echo or recognition noise.
+        # A normal interruption should contain a short phrase or question.
+        if len(normalized.split()) < 2 and normalized not in {"wait", "actually", "sorry", "hold on"}:
+            return JarvisCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
+
+        response = await process_jarvis_command(
+            message=transcribed_text.strip(),
+            user=user,
+            db=db,
+            voice_mode=True,
         )
+        response.interrupted = True
+        response.transcript = transcribed_text.strip()
+        response.reply = f"[Transcribed: \"{transcribed_text.strip()}\"]\n\n{response.reply}"
+        return response
     if not transcribed_text.strip():
         if continuation_text.strip():
             return JarvisCommandResponse(

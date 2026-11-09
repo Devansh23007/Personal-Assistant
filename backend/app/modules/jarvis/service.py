@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.app_launcher import launch_desktop_app
 from app.core.config import settings
 from app.modules.assistant.schemas import ChatMessage, ChatRequest
 from app.modules.assistant.service import reply_to_chat
@@ -22,32 +23,6 @@ from app.modules.jarvis.schemas import (
 )
 
 NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.txt")
-
-APP_MAPPINGS = {
-    "chrome": "start chrome",
-    "google chrome": "start chrome",
-    "notepad": "start notepad",
-    "notes": "start notepad",
-    "calc": "start calc",
-    "calculator": "start calc",
-    "code": "start code",
-    "vs code": "start code",
-    "vscode": "start code",
-    "terminal": "start wt",
-    "cmd": "start cmd",
-    "command prompt": "start cmd",
-    "explorer": "start explorer",
-    "file explorer": "start explorer",
-    "files": "start explorer",
-    "spotify": "start spotify",
-    "settings": "start ms-settings:",
-    "task manager": "start taskmgr",
-    "taskmgr": "start taskmgr",
-    "store": "start ms-windows-store:",
-    "microsoft store": "start ms-windows-store:",
-    "windows store": "start ms-windows-store:",
-}
-
 
 def transcribe_audio_bytes(wav_bytes: bytes) -> str:
     """Transcribes WAV audio bytes using Groq/OpenAI Whisper if configured, or SpeechRecognition."""
@@ -169,16 +144,8 @@ def execute_system_action(action: str, target: str | None = None) -> JarvisActio
 
     try:
         if action == "open_app":
-            key = target_clean.lower()
-            cmd = APP_MAPPINGS.get(key)
-            if cmd:
-                subprocess.Popen(["cmd", "/c", cmd], shell=True)
-                return JarvisActionDetails(action=action, target=target_clean, success=True, output=f"Launched {target_clean}")
-            else:
-                # Attempt safe launch
-                safe_target = re.sub(r"[^\w\-\.]", "", target_clean)
-                subprocess.Popen(["cmd", "/c", f"start {safe_target}"], shell=True)
-                return JarvisActionDetails(action=action, target=safe_target, success=True, output=f"Launched {safe_target}")
+            success, output = launch_desktop_app(target_clean)
+            return JarvisActionDetails(action=action, target=target_clean, success=success, output=output)
 
         elif action in ("search_web", "google"):
             query = target_clean or "Google"
@@ -249,7 +216,9 @@ async def process_jarvis_command(
     normalized = re.sub(r"\blauch\b", "launch", normalized, flags=re.IGNORECASE)
 
     # Strip common wake words and pleasantries
-    cleaned = re.sub(r"^(hey\s+jarvis|jarvis|ok\s+jarvis|okay\s+jarvis|please|can\s+you|could\s+you)\s*,?\s*", "", normalized, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:hey\s+jarvis|jarvis|ok\s+jarvis|okay\s+jarvis)\s*,?\s*", "", normalized, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:(?:please|can\s+you(?:\s+please)?|could\s+you(?:\s+please)?|would\s+you(?:\s+please)?|will\s+you(?:\s+please)?)\s*,?\s*)+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = cleaned.strip(" .,!?:;")
     lower = cleaned.lower()
 
     telemetry = get_system_telemetry()
@@ -280,7 +249,7 @@ async def process_jarvis_command(
         )
 
     # Stop / Quiet directive: abort any speech or action immediately
-    if lower in ("stop", "shut up", "be quiet", "silence", "quiet", "cancel", "pause", "halt", "abort", "stop talking"):
+    if lower in ("stop", "shut up", "be quiet", "silence", "quiet", "cancel", "pause", "halt", "abort", "stop talking", "stop listening", "end conversation", "go to standby"):
         return JarvisCommandResponse(
             reply="Standing by, Sir.",
             action_taken="STOP_DIRECTIVE",
@@ -379,11 +348,11 @@ async def process_jarvis_command(
         return JarvisCommandResponse(reply=reply, action_taken="search_web", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 7. Open Application
-    open_match = re.match(r"^(?:open|launch|start)\s+(.+)$", cleaned, flags=re.IGNORECASE)
+    open_match = re.match(r"^(?:open(?:\s+up)?|launch|start)\s+(.+)$", cleaned, flags=re.IGNORECASE)
     if open_match:
         app_target = open_match.group(1).strip()
         action = execute_system_action("open_app", app_target)
-        reply = f"Launching {app_target} immediately, Sir."
+        reply = action.output or (f"Opened {app_target}, Sir." if action.success else f"I couldn't open {app_target}, Sir.")
         return JarvisCommandResponse(reply=reply, action_taken="open_app", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 8. Note Taking
@@ -403,7 +372,7 @@ async def process_jarvis_command(
     jarvis_prompt = (
         f"[You are J.A.R.V.I.S., a hyper-competent, refined AI assistant. Address the user as 'Sir'. "
         f"Keep answers clear, polite, concise, and ready to be spoken aloud. "
-        f"You have access to all user tools for tasks, emails, expenses, documents, flashcards, meals, and workflows.] "
+        f"You can open locally installed desktop apps when asked, as well as use tools for tasks, emails, expenses, documents, flashcards, meals, and workflows. Only claim an app was opened when the tool confirms success.] "
         f"User command: {cleaned}"
     )
 
