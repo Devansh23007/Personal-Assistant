@@ -198,6 +198,22 @@ async def process_jarvis_command(
 
     telemetry = get_system_telemetry()
 
+    # 0. Wake Word or Greeting alone
+    if not cleaned or lower in ("hello", "hi", "hey", "wake up", "are you there", "online", "status"):
+        reply = "At your service, Sir. All systems are operational. What can I do for you?"
+        return JarvisCommandResponse(
+            reply=reply,
+            action_taken="WAKE_CONFIRMED",
+            audio_text="At your service, Sir. What can I do for you?",
+            system_status=telemetry,
+        )
+
+    if any(k in lower for k in ["good morning", "good evening", "good afternoon"]):
+        now_hr = datetime.datetime.now().hour
+        period = "morning" if now_hr < 12 else "afternoon" if now_hr < 18 else "evening"
+        reply = f"Good {period}, Sir. All systems are online and at your command."
+        return JarvisCommandResponse(reply=reply, action_taken="GREETING", audio_text=reply, system_status=telemetry)
+
     # 1. System diagnostics / status
     if any(k in lower for k in ["system status", "system diagnostics", "status report", "diagnostics", "check systems", "system specs"]):
         reply = (
