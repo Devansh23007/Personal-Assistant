@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AutoFlowView } from "./AutoFlowView";
 import { DocuVaultView } from "./DocuVaultView";
 import { InboxZeroView } from "./InboxZeroView";
+import { JarvisHUD } from "./JarvisHUD";
 import { LearnLoopView } from "./LearnLoopView";
 import { LifeOSView } from "./LifeOSView";
 import { MealMindView } from "./MealMindView";
@@ -9,6 +10,7 @@ import { PricePilotView } from "./PricePilotView";
 import { SpendWiseView } from "./SpendWiseView";
 
 const modules = [
+  { name: "JARVIS Core", detail: "Voice HUD & OS Automation", icon: "⚡", available: true },
   { name: "LifeOS", detail: "Tasks and planning", icon: "◷", available: true },
   { name: "InboxZero", detail: "Email summaries & triage", icon: "✉", available: true },
   { name: "SpendWise", detail: "Expenses and budgets", icon: "₹", available: true },
@@ -81,6 +83,11 @@ function Dashboard({ user, token, apiStatus }: { user: User; token: string; apiS
   }
 
   function handleModuleClick(moduleName: string, available: boolean) {
+    if (moduleName === "JARVIS Core") {
+      setActiveView("overview");
+      setNotice("");
+      return;
+    }
     if (available) {
       setActiveView(moduleName.toLowerCase());
       setNotice("");
@@ -93,8 +100,8 @@ function Dashboard({ user, token, apiStatus }: { user: User; token: string; apiS
     <div className="app-shell">
       <aside className="sidebar" aria-label="Sidebar navigation">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">p</span>
-          <span>personal<span className="brand-light">assistant</span></span>
+          <span className="brand-mark" aria-hidden="true" style={{ background: "#00f0ff", color: "#060911", fontWeight: "900" }}>⚡</span>
+          <span>J.A.R.V.I.S.<span className="brand-light"> OS</span></span>
         </div>
         <p className="nav-label">MODULES</p>
         <nav className="nav-list">
@@ -189,27 +196,14 @@ function Dashboard({ user, token, apiStatus }: { user: User; token: string; apiS
           <AutoFlowView token={token} />
         ) : (
           <>
-            <section className="welcome">
-              <div>
-                <p className="eyebrow">YOUR WORKSPACE</p>
-                <h1>A little more room<br />for what matters.</h1>
-                <p className="welcome-copy">Your personal workspace is ready. Pick any module or ask your AI assistant to manage tasks, emails, expenses, meals, and automations.</p>
-              </div>
-              <div className="welcome-art" aria-hidden="true">
-                <div className="sun" />
-                <div className="hill hill-back" />
-                <div className="hill hill-front" />
-                <span className="art-sparkle sparkle-one">✳</span>
-                <span className="art-sparkle sparkle-two">✦</span>
-              </div>
-            </section>
+            <JarvisHUD onNavigateModule={(mod) => handleModuleClick(mod, true)} />
 
-            <section className="section-heading">
-              <div><p className="eyebrow">YOUR SPACE</p><h2>All Modules Ready</h2></div>
+            <section className="section-heading" style={{ marginTop: "32px" }}>
+              <div><p className="eyebrow">INTEGRATED MODULES</p><h2>Command & Control Ecosystem</h2></div>
               <span className="module-count">8 modules active</span>
             </section>
             <section className="module-grid" aria-label="Assistant modules">
-              {modules.map((module, index) => (
+              {modules.filter(m => m.name !== "JARVIS Core").map((module, index) => (
                 <div
                   className={`module-card card-${index + 1}`}
                   onClick={() => handleModuleClick(module.name, module.available)}

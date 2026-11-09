@@ -18,6 +18,7 @@ frontend/.vite/
 !.env.example
 *.db
 *.sqlite*
+*notes.txt
 storage/
 .idea/
 .vscode/
