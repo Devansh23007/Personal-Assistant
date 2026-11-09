@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, session } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -49,6 +49,21 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Explicitly grant microphone permissions in Electron
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media') {
+      return callback(true);
+    }
+    callback(false);
+  });
+
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === 'media') {
+      return true;
+    }
+    return false;
+  });
+
   startBackend();
   setTimeout(createWindow, 800);
 

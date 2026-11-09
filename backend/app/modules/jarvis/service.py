@@ -43,7 +43,58 @@ APP_MAPPINGS = {
     "settings": "start ms-settings:",
     "task manager": "start taskmgr",
     "taskmgr": "start taskmgr",
+    "store": "start ms-windows-store:",
+    "microsoft store": "start ms-windows-store:",
+    "windows store": "start ms-windows-store:",
 }
+
+
+def transcribe_audio_bytes(wav_bytes: bytes) -> str:
+    """Transcribes WAV audio bytes using Groq/OpenAI Whisper if configured, or SpeechRecognition."""
+    import io
+    if not wav_bytes or len(wav_bytes) < 1000:
+        return ""
+
+    # 1. High-accuracy Whisper transcription if API key is present
+    if settings.llm_api_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+            whisper_model = settings.whisper_model or "whisper-large-v3-turbo"
+            transcription = client.audio.transcriptions.create(
+                model=whisper_model,
+                file=("command.wav", wav_bytes, "audio/wav"),
+            )
+            if transcription.text and transcription.text.strip():
+                result = transcription.text.strip()
+                print(f"[JARVIS Groq Whisper] Transcribed: '{result}'")
+                return result
+        except Exception as e:
+            print("[JARVIS Whisper] Notice, falling back to Google engine:", e)
+
+    # 2. Multi-accent SpeechRecognition fallback
+    try:
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        buf = io.BytesIO(wav_bytes)
+        with sr.AudioFile(buf) as source:
+            audio = recognizer.record(source)
+
+        # Try Indian English first (since user is in India), then standard US/UK
+        for lang in ["en-IN", "en-US", "en-GB"]:
+            try:
+                text = recognizer.recognize_google(audio, language=lang)
+                if text and text.strip():
+                    return text.strip()
+            except sr.UnknownValueError:
+                continue
+            except Exception as e:
+                print(f"[JARVIS STT] Error on lang {lang}: {e}")
+                break
+        return ""
+    except Exception as exc:
+        print("[JARVIS STT] Exception during transcription:", exc)
+        return ""
 
 
 def get_system_telemetry() -> JarvisTelemetryResponse:
@@ -192,11 +243,41 @@ async def process_jarvis_command(
     voice_mode: bool = False,
 ) -> JarvisCommandResponse:
     raw = message.strip()
+    # Normalize common typos
+    normalized = re.sub(r"\bopne\b", "open", raw, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bstrat\b", "start", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\blauch\b", "launch", normalized, flags=re.IGNORECASE)
+
     # Strip common wake words and pleasantries
-    cleaned = re.sub(r"^(hey\s+jarvis|jarvis|ok\s+jarvis|okay\s+jarvis|please|can\s+you|could\s+you)\s*,?\s*", "", raw, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(hey\s+jarvis|jarvis|ok\s+jarvis|okay\s+jarvis|please|can\s+you|could\s+you)\s*,?\s*", "", normalized, flags=re.IGNORECASE).strip()
     lower = cleaned.lower()
 
     telemetry = get_system_telemetry()
+
+    # Store download / install directive
+    store_match = re.search(r"(?:open\s+)?(?:microsoft\s+store|store)\s+(?:and\s+)?(?:download|install|get)\s+(.+)", lower)
+    if store_match:
+        app_name = store_match.group(1).strip()
+        subprocess.Popen(["cmd", "/c", f"start ms-windows-store://search/?query={urllib.parse.quote(app_name)}"], shell=True)
+        reply = f"Opening Microsoft Store to download {app_name} for you now, Sir."
+        return JarvisCommandResponse(
+            reply=reply,
+            action_taken=f"STORE_DOWNLOAD: {app_name}",
+            audio_text=reply,
+            system_status=telemetry,
+        )
+
+    download_match = re.match(r"^(?:download|install)\s+(.+)$", lower)
+    if download_match:
+        app_name = download_match.group(1).strip()
+        subprocess.Popen(["cmd", "/c", f"start ms-windows-store://search/?query={urllib.parse.quote(app_name)}"], shell=True)
+        reply = f"Opening Microsoft Store for {app_name} installation, Sir."
+        return JarvisCommandResponse(
+            reply=reply,
+            action_taken=f"STORE_SEARCH: {app_name}",
+            audio_text=reply,
+            system_status=telemetry,
+        )
 
     # 0. Wake Word or Greeting alone
     if not cleaned or lower in ("hello", "hi", "hey", "wake up", "are you there", "online", "status"):
@@ -214,17 +295,23 @@ async def process_jarvis_command(
         reply = f"Good {period}, Sir. All systems are online and at your command."
         return JarvisCommandResponse(reply=reply, action_taken="GREETING", audio_text=reply, system_status=telemetry)
 
-    # 1. System diagnostics / status
-    if any(k in lower for k in ["system status", "system diagnostics", "status report", "diagnostics", "check systems", "system specs"]):
+    # 1. System diagnostics / status / hardware check
+    system_check_phrases = [
+        "check my system", "check system", "check the system", "how is my system",
+        "how's my system", "system status", "system diagnostics", "status report",
+        "diagnostics", "check systems", "system specs", "pc status", "hardware status",
+        "system info", "laptop specs", "system health"
+    ]
+    if any(k in lower for k in system_check_phrases):
         reply = (
-            f"All systems nominal, Sir. Memory utilization is at {telemetry.memory_percent}% "
-            f"({telemetry.memory_used_gb} GB of {telemetry.memory_total_gb} GB), "
-            f"Battery is at {telemetry.battery_percent}% ({telemetry.battery_status}), "
-            f"running on {telemetry.os_name}."
+            f"All systems nominal, Sir. Running {telemetry.os_name} on host '{telemetry.hostname}'. "
+            f"Memory utilization is at {telemetry.memory_percent}% ({telemetry.memory_used_gb} GB used of {telemetry.memory_total_gb} GB). "
+            f"Power is at {telemetry.battery_percent}% ({telemetry.battery_status}), with CPU operating at nominal levels."
         )
         return JarvisCommandResponse(
             reply=reply,
-            audio_text=reply,
+            action_taken="SYSTEM_DIAGNOSTICS",
+            audio_text=f"All systems nominal, Sir. Memory is at {telemetry.memory_percent} percent, power is at {telemetry.battery_percent} percent, and operating telemetry is nominal.",
             system_status=telemetry,
         )
 

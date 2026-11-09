@@ -856,3 +856,40 @@
   background: rgba(0, 240, 255, 0.3);
   box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
 }
+
+.live-vol-meter {
+  width: 90px;
+  height: 10px;
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid rgba(0, 255, 170, 0.4);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.live-vol-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00f0ff, #00ffaa);
+  box-shadow: 0 0 6px #00ffaa;
+  transition: width 0.05s ease;
+}
+
+.mic-select-dropdown {
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  color: #92e6f7;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-family: monospace;
+  font-size: 10px;
+  outline: none;
+  cursor: pointer;
+  max-width: 170px;
+}
+
+.mic-select-dropdown option {
+  background: #040810;
+  color: #c5e4f3;
+}

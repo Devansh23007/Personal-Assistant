@@ -21,10 +21,17 @@ MAX_TOOL_ROUNDS = 3
 
 
 async def reply_to_chat(request: ChatRequest, context: ToolContext | None = None) -> ChatResponse:
-    if not settings.llm_api_key or not settings.llm_model:
-        raise HTTPException(status_code=503, detail="Assistant is not configured. Set LLM_API_KEY and LLM_MODEL in backend/.env.")
+    is_ollama = (settings.llm_provider.lower() == "ollama") or ("11434" in (settings.llm_base_url or ""))
+    active_key = settings.llm_api_key or ("ollama" if is_ollama else "")
+    active_base_url = (settings.ollama_base_url if is_ollama else settings.llm_base_url) or "https://api.groq.com/openai/v1"
+    active_model = settings.llm_model or (settings.ollama_model if is_ollama else "openai/gpt-oss-120b")
+    if not is_ollama and not active_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant is not configured. Set LLM_API_KEY in backend/.env or set LLM_PROVIDER=ollama for local offline mode.",
+        )
 
-    client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    client = AsyncOpenAI(api_key=active_key, base_url=active_base_url)
     messages: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     if request.history:
         transcript = "\n".join(
@@ -40,7 +47,7 @@ async def reply_to_chat(request: ChatRequest, context: ToolContext | None = None
     try:
         for round_number in range(MAX_TOOL_ROUNDS + 1):
             completion = await client.chat.completions.create(
-                model=settings.llm_model,
+                model=active_model,
                 messages=messages,  # type: ignore[arg-type]
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
