@@ -1,9 +1,9 @@
 @echo off
-title J.A.R.V.I.S. Desktop System
+title V.I.P.E.R. Desktop Assistant
 cd /d "%~dp0"
 
 echo ========================================================
-echo   Launching J.A.R.V.I.S. Native Desktop Application
+echo   Launching V.I.P.E.R. Native Desktop Application
 echo ========================================================
 echo.
 

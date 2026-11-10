@@ -41,7 +41,7 @@ def main():
 
     # 3. Create native desktop window
     window = webview.create_window(
-        title="J.A.R.V.I.S. - MARK VII",
+        title="V.I.P.E.R. - Virtual Intelligent Personal Electronic Respondent",
         url="http://127.0.0.1:8000/",
         width=1240,
         height=820,

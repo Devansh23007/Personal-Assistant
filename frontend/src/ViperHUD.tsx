@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-type JarvisStatus = "idle" | "armed" | "listening" | "thinking" | "speaking";
+type ViperStatus = "idle" | "armed" | "listening" | "thinking" | "speaking";
 
 interface Telemetry {
   cpu_percent: number | null;
@@ -17,7 +17,7 @@ interface Telemetry {
 interface ActionLogItem {
   id: string;
   timestamp: string;
-  type: "user" | "jarvis" | "action";
+  type: "user" | "viper" | "action";
   text: string;
   actionTag?: string;
 }
@@ -29,7 +29,7 @@ interface ConversationMessage {
 
 function loadConversationHistory(): ConversationMessage[] {
   try {
-    const saved = JSON.parse(sessionStorage.getItem("jarvisConversationHistory") || "[]");
+    const saved = JSON.parse(sessionStorage.getItem("viperConversationHistory") || "[]");
     if (!Array.isArray(saved)) return [];
     return saved
       .filter((item): item is ConversationMessage =>
@@ -43,6 +43,7 @@ function loadConversationHistory(): ConversationMessage[] {
 
 function prepareSpeechText(rawText: string): string {
   return rawText
+    .replace(/\bV\s*\.?\s*I\s*\.?\s*P\s*\.?\s*E\s*\.?\s*R\.?\b/gi, "Viper")
     .replace(/```[\s\S]*?```/g, " Code block omitted. ")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s*/gm, "")
@@ -215,11 +216,11 @@ function playAudioChime(type: "activate" | "confirm" | "alert") {
   } catch {}
 }
 
-export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: string) => void } = {}) {
-  const [hudState, setHudState] = useState<JarvisStatus>("armed");
+export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string) => void } = {}) {
+  const [hudState, setHudState] = useState<ViperStatus>("armed");
   const [isVoiceMuted, setIsVoiceMuted] = useState<boolean>(false);
   const [isWakeWordActive, setIsWakeWordActive] = useState<boolean>(true);
-  const [micStatusMsg, setMicStatusMsg] = useState<string>("Standby active. Say 'Hey Jarvis' anytime.");
+  const [micStatusMsg, setMicStatusMsg] = useState<string>("Standby active. Say 'Hey Viper' anytime.");
   const [commandInput, setCommandInput] = useState<string>("");
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
@@ -233,8 +234,8 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     {
       id: "init",
       timestamp: new Date().toLocaleTimeString(),
-      type: "jarvis",
-      text: "J.A.R.V.I.S. Core Online. Say 'Hey Jarvis' or click Core to talk.",
+      type: "viper",
+      text: "V.I.P.E.R. Core Online. Say 'Hey Viper' or click Core to talk.",
       actionTag: "SYSTEM_READY",
     },
   ]);
@@ -243,7 +244,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   const naturalAudioRef = useRef<HTMLAudioElement | null>(null);
   const naturalAudioUrlRef = useRef<string | null>(null);
   const ttsRequestRef = useRef<AbortController | null>(null);
-  const hudStateRef = useRef<JarvisStatus>("armed");
+  const hudStateRef = useRef<ViperStatus>("armed");
   hudStateRef.current = hudState;
 
   const isWakeWordActiveRef = useRef<boolean>(true);
@@ -277,7 +278,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     ].filter((message) => message.content).slice(-20);
     conversationHistoryRef.current = next;
     try {
-      sessionStorage.setItem("jarvisConversationHistory", JSON.stringify(next));
+      sessionStorage.setItem("viperConversationHistory", JSON.stringify(next));
     } catch {
       // Conversation remains available in memory for the current page session.
     }
@@ -346,7 +347,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   // Poll Telemetry
   useEffect(() => {
     const fetchTelemetry = () => {
-      fetch("/api/jarvis/telemetry")
+      fetch("/api/viper/telemetry")
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data) setTelemetry(data);
@@ -403,7 +404,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
-          ? "Standby active. Say 'Jarvis' anytime."
+          ? "Standby active. Say 'Viper' anytime."
           : "Click Core or press Space to speak."
       );
     }
@@ -468,7 +469,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     };
 
     try {
-      const response = await fetch("/api/jarvis/speech", {
+      const response = await fetch("/api/viper/speech", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: cleanText, voice: selectedVoiceURI.slice(3) }),
@@ -514,8 +515,8 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     }
   };
 
-  // Put JARVIS into Active Listening state (Turns Core Green & starts recording command)
-  const startActiveCommandListening = (status = "🟢 J.A.R.V.I.S. ACTIVATED — listening for your command now.") => {
+  // Put VIPER into Active Listening state (Turns Core Green & starts recording command)
+  const startActiveCommandListening = (status = "🟢 V.I.P.E.R. ACTIVATED — listening for your command now.") => {
     const ctx = getAudioContext();
     if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
 
@@ -540,7 +541,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     captureModeRef.current = "direct";
     isCapturingRef.current = false;
     setHudState("listening");
-    setMicStatusMsg("🟢 J.A.R.V.I.S. is listening. Continue speaking, or say 'stop listening' to leave conversation mode.");
+    setMicStatusMsg("🟢 V.I.P.E.R. is listening. Continue speaking, or say 'stop listening' to leave conversation mode.");
   };
 
   // Submit Text Command to Backend
@@ -569,7 +570,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     setMicStatusMsg("Computing directive with AI engine...");
 
     try {
-      const res = await fetch("/api/jarvis/command", {
+      const res = await fetch("/api/viper/command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -583,13 +584,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       const data = await res.json();
       playAudioChime("confirm");
 
-      const jarvisLogId = Math.random().toString(36).substring(7);
+      const viperLogId = Math.random().toString(36).substring(7);
       setLogs((prev) => [
         ...prev,
         {
-          id: jarvisLogId,
+          id: viperLogId,
           timestamp: new Date().toLocaleTimeString(),
-          type: "jarvis",
+          type: "viper",
           text: data.reply,
           actionTag: data.action_taken ? data.action_taken.toUpperCase() : undefined,
         },
@@ -611,7 +612,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         {
           id: Math.random().toString(36).substring(7),
           timestamp: new Date().toLocaleTimeString(),
-          type: "jarvis",
+          type: "viper",
           text: `Command error: ${err.message || "Failed to execute"}. Please verify backend status, Sir.`,
           actionTag: "ERROR",
         },
@@ -619,13 +620,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
-          ? "Standby active. Say 'Hey Jarvis' anytime."
+          ? "Standby active. Say 'Hey Viper' anytime."
           : "Click Core or press Space to speak."
       );
     }
   };
 
-  // Transmit Audio to Backend (/api/jarvis/voice)
+  // Transmit Audio to Backend (/api/viper/voice)
   const transmitRecordedAudio = async (wavBlob: Blob, mode: "wake" | "direct" | "interrupt") => {
     const isWakeMode = mode === "wake";
     const isInterruptMode = mode === "interrupt";
@@ -643,7 +644,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         ? `&continuation_text=${encodeURIComponent(continuation)}`
         : "";
 
-      const res = await fetch(`/api/jarvis/voice?wake_mode=${isWakeMode ? "true" : "false"}&interrupt_mode=${isInterruptMode ? "true" : "false"}${continuationParam}`, {
+      const res = await fetch(`/api/viper/voice?wake_mode=${isWakeMode ? "true" : "false"}&interrupt_mode=${isInterruptMode ? "true" : "false"}${continuationParam}`, {
         method: "POST",
         body: formData,
       });
@@ -652,7 +653,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       const data = await res.json();
 
       // A spoken stop is monitored while TTS is playing. Handle it before
-      // any normal response path so J.A.R.V.I.S. does not speak over it.
+      // any normal response path so V.I.P.E.R. does not speak over it.
       if (isInterruptMode) {
         isBargeInPendingRef.current = false;
         if (data.interrupted) {
@@ -687,25 +688,32 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         return;
       }
 
-      // Case A: In wake_mode and utterance was not directed at Jarvis (no 'Jarvis' found)
+      if (data.action_taken === "ECHO_IGNORED") {
+        pendingTranscriptRef.current = "";
+        if (isConversationActiveRef.current) startConversationListening();
+        else setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+        return;
+      }
+
+      // Case A: In wake_mode and utterance was not directed at V.I.P.E.R.
       // Stay COMPLETELY silent and IDLE. Zero flicker, zero interruption!
       if (isWakeMode && data.action_taken === "WAKE_IGNORED") {
         pendingTranscriptRef.current = "";
         setHudState("armed");
-        setMicStatusMsg("Standby active. Say 'Hey Jarvis' anytime.");
+        setMicStatusMsg("Standby active. Say 'Hey Viper' anytime.");
         return;
       }
 
-      // Case B: User said ONLY "Hey Jarvis" -> AWAKEN & TURN GREEN IMMEDIATELY!
+      // Case B: User said ONLY "Hey Viper" -> AWAKEN & TURN GREEN IMMEDIATELY!
       if (data.action_taken === "WAKE_CONFIRMED") {
         pendingTranscriptRef.current = "";
-        const jarvisLogId = Math.random().toString(36).substring(7);
+        const viperLogId = Math.random().toString(36).substring(7);
         setLogs((prev) => [
           ...prev,
           {
-            id: jarvisLogId,
+            id: viperLogId,
             timestamp: new Date().toLocaleTimeString(),
-            type: "jarvis",
+            type: "viper",
             text: "Yes, Sir? Standing by for your directive.",
             actionTag: "WAKE_CONFIRMED",
           },
@@ -718,6 +726,10 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
       if (data.action_taken === "NO_SPEECH_DETECTED") {
         pendingTranscriptRef.current = "";
+        if (isConversationActiveRef.current) {
+          startConversationListening();
+          return;
+        }
         if (!isWakeMode) {
           playAudioChime("alert");
           setLogs((prev) => [
@@ -725,7 +737,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             {
               id: Math.random().toString(36).substring(7),
               timestamp: new Date().toLocaleTimeString(),
-              type: "jarvis",
+              type: "viper",
               text: "I couldn't hear any distinct directive, Sir. Please try speaking again.",
               actionTag: "NO_SPEECH_DETECTED",
             },
@@ -734,7 +746,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
         setMicStatusMsg(
           isWakeWordActiveRef.current
-            ? "Standby active. Say 'Hey Jarvis' anytime."
+            ? "Standby active. Say 'Hey Viper' anytime."
             : "Click Core to retry."
         );
         return;
@@ -746,13 +758,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
         setMicStatusMsg(
           isWakeWordActiveRef.current
-            ? "Conversation ended. Say 'Jarvis' to start again."
+            ? "Conversation ended. Say 'Viper' to start again."
             : "Conversation ended. Click Core or press Space to start again."
         );
         return;
       }
 
-      // Case C: Direct command or "Hey Jarvis + [command]" executed!
+      // Case C: Direct command or "Hey Viper + [command]" executed!
       pendingTranscriptRef.current = "";
       isConversationActiveRef.current = true;
       const userTurn = String(data.transcript || "").trim();
@@ -760,13 +772,13 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       if (userTurn && assistantTurn) rememberConversationTurn(userTurn, assistantTurn);
       playAudioChime("confirm");
 
-      const jarvisLogId = Math.random().toString(36).substring(7);
+      const viperLogId = Math.random().toString(36).substring(7);
       setLogs((prev) => [
         ...prev,
         {
-          id: jarvisLogId,
+          id: viperLogId,
           timestamp: new Date().toLocaleTimeString(),
-          type: "jarvis",
+          type: "viper",
           text: data.reply,
           actionTag: data.action_taken ? data.action_taken.toUpperCase() : "VOICE_COMMAND",
         },
@@ -788,7 +800,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           {
             id: Math.random().toString(36).substring(7),
             timestamp: new Date().toLocaleTimeString(),
-            type: "jarvis",
+            type: "viper",
             text: `Voice notice: ${err.message || "Could not process audio"}.`,
             actionTag: "VOICE_ERROR",
           },
@@ -797,7 +809,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
-          ? "Standby active. Say 'Hey Jarvis' anytime."
+          ? "Standby active. Say 'Hey Viper' anytime."
           : "Click Core to retry."
       );
     }
@@ -818,7 +830,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
       setMicStatusMsg(
         isWakeWordActiveRef.current
-          ? "Standby active. Say 'Hey Jarvis' anytime."
+          ? "Standby active. Say 'Hey Viper' anytime."
           : "Click Core or press Space to Speak."
       );
       return;
@@ -868,7 +880,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           channelCount: 1,
           autoGainControl: true,
           echoCancellation: true,
-          noiseSuppression: false,
+          noiseSuppression: true,
         };
         if (selectedDeviceId) {
           audioConstraints.deviceId = { exact: selectedDeviceId };
@@ -911,6 +923,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         scriptProcessorRef.current = processor;
 
         processor.onaudioprocess = (e) => {
+          // Keep the processor active without routing microphone input to speakers.
+          e.outputBuffer.getChannelData(0).fill(0);
+
           // Don't collect commands while a request is processing. During speech,
           // keep a short VAD capture active so a spoken "stop" can interrupt TTS.
           if (hudStateRef.current === "thinking") {
@@ -982,7 +997,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           }
 
           // 1. Silent Hands-Free Wake-Word Standby Listening
-          // Buffers silently in memory until "Hey Jarvis" is confirmed
+          // Buffers silently in memory until "Hey Viper" is confirmed
           if (
             isWakeWordActiveRef.current &&
             !isCapturingRef.current &&
@@ -995,7 +1010,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               silenceFramesRef.current = 0;
               totalFramesRef.current = 1;
               recordedChunksRef.current = [new Float32Array(inputData)];
-              setMicStatusMsg("Wake phrase detected — checking for 'Hey Jarvis'...");
+              setMicStatusMsg("Wake phrase detected — checking for 'Hey Viper'...");
             }
             return;
           }
@@ -1026,7 +1041,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             // NATURAL SILENCE ENDPOINTING:
             // Short acoustic hangover for the current batch-transcription flow.
             // Smarter end-of-turn detection should replace this fixed threshold.
-            const silenceFrameLimit = captureModeRef.current === "wake" ? 10 : 18;
+            const silenceFrameLimit = captureModeRef.current === "wake" ? 10 : 26;
             if (hasSpokenRef.current && silenceFramesRef.current >= silenceFrameLimit) {
               finalizeAudioRef.current();
               return;
@@ -1034,7 +1049,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
 
             // SAFETY MAX LIMIT:
             // Keep wake detection responsive; command clips can run for about 13 seconds.
-            const maxFrameLimit = captureModeRef.current === "wake" ? 35 : 140;
+            const maxFrameLimit = captureModeRef.current === "wake" ? 35 : 320;
             if (totalFramesRef.current >= maxFrameLimit) {
               finalizeAudioRef.current();
               return;
@@ -1056,7 +1071,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
                 setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
                 setMicStatusMsg(
                   isWakeWordActiveRef.current
-                    ? "Standby active. Say 'Jarvis' anytime."
+                    ? "Standby active. Say 'Viper' anytime."
                     : "Click Core or press Space to Speak."
                 );
               }
@@ -1112,7 +1127,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
     isWakeWordActiveRef.current = nextVal;
     if (nextVal) {
       setHudState("armed");
-      setMicStatusMsg("Standby active. Say 'Hey Jarvis' anytime.");
+      setMicStatusMsg("Standby active. Say 'Hey Viper' anytime.");
       playAudioChime("confirm");
     } else {
       if (hudStateRef.current === "armed") setHudState("idle");
@@ -1271,18 +1286,18 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
   };
 
   return (
-    <div className="jarvis-hud-container">
+    <div className="viper-hud-container">
       {/* Top Telemetry Header */}
-      <div className="jarvis-top-bar">
-        <div className="jarvis-brand">
-          <span className="jarvis-status-led" data-state={hudState}></span>
+      <div className="viper-top-bar">
+        <div className="viper-brand">
+          <span className="viper-status-led" data-state={hudState}></span>
           <div>
-            <div className="jarvis-title">J.A.R.V.I.S.</div>
-            <div className="jarvis-subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM · MARK VII</div>
+            <div className="viper-title">V.I.P.E.R.</div>
+            <div className="viper-subtitle">VIRTUAL INTELLIGENT PERSONAL ELECTRONIC RESPONDENT</div>
           </div>
         </div>
 
-        <div className="jarvis-telemetry-strip">
+        <div className="viper-telemetry-strip">
           <div className="telemetry-pill">
             <span className="pill-label">CPU</span>
             <span className="pill-val">{telemetry?.cpu_percent ? `${telemetry.cpu_percent}%` : "NOMINAL"}</span>
@@ -1302,7 +1317,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           </div>
         </div>
 
-        <div className="jarvis-controls-strip">
+        <div className="viper-controls-strip">
           {audioDevices.length > 0 && (
             <select
               className="mic-select-dropdown"
@@ -1331,7 +1346,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             className="speech-voice-select"
             value={selectedVoiceURI}
             onChange={(event) => setSelectedVoiceURI(event.target.value)}
-            title="Choose J.A.R.V.I.S.'s speaking voice"
+            title="Choose V.I.P.E.R.'s speaking voice"
           >
             <optgroup label="Natural AI voices">
               <option value="ai:troy">AI Natural — Troy</option>
@@ -1358,7 +1373,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
             type="button"
             className={`hud-toggle-btn ${isWakeWordActive ? "active" : ""}`}
             onClick={toggleWakeWordMode}
-            title="Toggle Continuous Hands-Free Wake Word ('Hey Jarvis')"
+            title="Toggle Continuous Hands-Free Wake Word ('Hey Viper')"
           >
             {isWakeWordActive ? "🟢 WAKE WORD: ON" : "⚪ WAKE WORD: OFF"}
           </button>
@@ -1386,9 +1401,9 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
       </div>
 
       {/* Main Grid: Visualizer Core + Terminal Log */}
-      <div className="jarvis-main-viewport">
+      <div className="viper-main-viewport">
         {/* Left Column: Arc Reactor Core & Voice Controls */}
-        <div className="jarvis-core-section">
+        <div className="viper-core-section">
           <div
             className="arc-reactor-wrapper"
             onClick={toggleVoiceInput}
@@ -1401,22 +1416,22 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               </span>
               <span className="core-hint">
                 {hudState === "armed"
-                  ? "ARMED... SAY 'HEY JARVIS' TO ACTIVATE"
+                  ? "ARMED... SAY 'HEY VIPER' TO ACTIVATE"
                   : hudState === "listening"
-                  ? "J.A.R.V.I.S. ACTIVATED — SAY YOUR COMMAND"
+                  ? "V.I.P.E.R. ACTIVATED — SAY YOUR COMMAND"
                   : hudState === "thinking"
                   ? "COMPUTING WITH GROQ..."
                   : hudState === "speaking"
                   ? "SPEAKING... (CLICK TO STOP)"
                   : isWakeWordActive
-                  ? "SAY 'HEY JARVIS' (OR CLICK TO TALK)"
+                  ? "SAY 'HEY VIPER' (OR CLICK TO TALK)"
                   : "CLICK TO TALK (OR PRESS SPACE)"}
               </span>
             </div>
           </div>
 
           {/* Status & Live Voice Transcript Bar */}
-          <div className="jarvis-live-transcript">
+          <div className="viper-live-transcript">
             <span className="transcript-prefix">VOICE:</span>
             <span className="transcript-text">{micStatusMsg}</span>
             {hudState === "listening" && (
@@ -1427,11 +1442,11 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
           </div>
 
           {/* Quick Actions Chips */}
-          <div className="jarvis-quick-chips">
+          <div className="viper-quick-chips">
             <span className="chips-title">RAPID DIRECTIVES:</span>
             <div className="chips-row">
-              <button type="button" onClick={() => executeTextCommand("Hey Jarvis")}>
-                ⚡ Wake Jarvis
+              <button type="button" onClick={() => executeTextCommand("Hey Viper")}>
+                ⚡ Wake Assistant
               </button>
               <button type="button" onClick={() => executeTextCommand("check my system")}>
                 📊 Check System
@@ -1459,7 +1474,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
         </div>
 
         {/* Right Column: Cyber Action Terminal & Directive Feed */}
-        <div className="jarvis-terminal-section">
+        <div className="viper-terminal-section">
           <div className="terminal-header">
             <div className="terminal-title">
               <span className="terminal-dot"></span> DIRECTIVE LOG & SYSTEM PROTOCOLS
@@ -1473,7 +1488,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
                     {
                       id: "cleared",
                       timestamp: new Date().toLocaleTimeString(),
-                      type: "jarvis",
+                      type: "viper",
                       text: "Terminal log cleared, Sir. All background protocols running.",
                     },
                   ])
@@ -1489,7 +1504,7 @@ export function JarvisHUD({ onNavigateModule }: { onNavigateModule?: (mod: strin
               <div key={log.id} className={`terminal-entry entry-${log.type}`}>
                 <div className="entry-meta">
                   <span className="entry-time">{log.timestamp}</span>
-                  <span className="entry-sender">[{log.type === "user" ? "DEVANSH" : "JARVIS"}]</span>
+                  <span className="entry-sender">[{log.type === "user" ? "DEVANSH" : "V.I.P.E.R."}]</span>
                   {log.actionTag && <span className="entry-badge">{log.actionTag}</span>}
                 </div>
                 <div className="entry-content">{log.text}</div>

@@ -5,21 +5,25 @@ import re
 import socket
 import subprocess
 import urllib.parse
-import webbrowser
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.app_launcher import launch_desktop_app
+from app.core.app_launcher import (
+    close_active_browser_tab,
+    close_app_window,
+    launch_desktop_app,
+    open_url_with_preferred_browser,
+)
 from app.core.config import settings
 from app.modules.assistant.schemas import ChatMessage, ChatRequest
 from app.modules.assistant.service import reply_to_chat
 from app.modules.assistant.tools import ToolContext
 from app.modules.auth.models import User
-from app.modules.jarvis.schemas import (
-    JarvisActionDetails,
-    JarvisCommandResponse,
-    JarvisTelemetryResponse,
+from app.modules.viper.schemas import (
+    ViperActionDetails,
+    ViperCommandResponse,
+    ViperTelemetryResponse,
 )
 
 NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.txt")
@@ -39,13 +43,26 @@ def transcribe_audio_bytes(wav_bytes: bytes) -> str:
             transcription = client.audio.transcriptions.create(
                 model=whisper_model,
                 file=("command.wav", wav_bytes, "audio/wav"),
+                language="en",
+                response_format="verbose_json",
+                temperature=0.0,
             )
             if transcription.text and transcription.text.strip():
                 result = transcription.text.strip()
-                print(f"[JARVIS Groq Whisper] Transcribed: '{result}'")
+                segments = getattr(transcription, "segments", None) or []
+                if segments and all(
+                    float(getattr(segment, "no_speech_prob", 0.0) or 0.0) >= 0.65
+                    for segment in segments
+                ):
+                    print("[VIPER Groq Whisper] Ignored a low-speech-confidence transcript.")
+                    return ""
+                if not re.search(r"[A-Za-z0-9]", result):
+                    print("[VIPER Groq Whisper] Ignored a punctuation-only transcript.")
+                    return ""
+                print(f"[VIPER Groq Whisper] Transcribed: '{result}'")
                 return result
         except Exception as e:
-            print("[JARVIS Whisper] Notice, falling back to Google engine:", e)
+            print("[VIPER Whisper] Notice, falling back to Google engine:", e)
 
     # 2. Multi-accent SpeechRecognition fallback
     try:
@@ -64,15 +81,15 @@ def transcribe_audio_bytes(wav_bytes: bytes) -> str:
             except sr.UnknownValueError:
                 continue
             except Exception as e:
-                print(f"[JARVIS STT] Error on lang {lang}: {e}")
+                print(f"[VIPER STT] Error on lang {lang}: {e}")
                 break
         return ""
     except Exception as exc:
-        print("[JARVIS STT] Exception during transcription:", exc)
+        print("[VIPER STT] Exception during transcription:", exc)
         return ""
 
 
-def get_system_telemetry() -> JarvisTelemetryResponse:
+def get_system_telemetry() -> ViperTelemetryResponse:
     hostname = socket.gethostname()
     os_name = f"Windows {platform.release()}" if platform.system() == "Windows" else platform.system()
 
@@ -125,7 +142,7 @@ def get_system_telemetry() -> JarvisTelemetryResponse:
         except Exception:
             pass
 
-    return JarvisTelemetryResponse(
+    return ViperTelemetryResponse(
         cpu_percent=cpu_percent,
         memory_used_gb=mem_used_gb,
         memory_total_gb=mem_total_gb,
@@ -138,33 +155,33 @@ def get_system_telemetry() -> JarvisTelemetryResponse:
     )
 
 
-def execute_system_action(action: str, target: str | None = None) -> JarvisActionDetails:
+def execute_system_action(action: str, target: str | None = None) -> ViperActionDetails:
     action = action.lower().strip()
     target_clean = (target or "").strip()
 
     try:
         if action == "open_app":
             success, output = launch_desktop_app(target_clean)
-            return JarvisActionDetails(action=action, target=target_clean, success=success, output=output)
+            return ViperActionDetails(action=action, target=target_clean, success=success, output=output)
 
         elif action in ("search_web", "google"):
             query = target_clean or "Google"
             url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-            webbrowser.open(url)
-            return JarvisActionDetails(action="search_web", target=query, success=True, output=f"Searched Google for: {query}")
+            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            return ViperActionDetails(action="search_web", target=query, success=opened, output=f"Searched Google for: {query}" if opened else "Couldn't open the browser.")
 
         elif action == "open_url":
             url = target_clean
             if not url.startswith("http://") and not url.startswith("https://"):
                 url = f"https://{url}"
-            webbrowser.open(url)
-            return JarvisActionDetails(action=action, target=url, success=True, output=f"Opened {url}")
+            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            return ViperActionDetails(action=action, target=url, success=opened, output=f"Opened {url}" if opened else "Couldn't open the browser.")
 
         elif action in ("play_music", "youtube"):
             query = target_clean or "relaxing music"
             url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-            webbrowser.open(url)
-            return JarvisActionDetails(action="play_music", target=query, success=True, output=f"Playing {query} on YouTube")
+            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            return ViperActionDetails(action="play_music", target=query, success=opened, output=f"Playing {query} on YouTube" if opened else "Couldn't open the browser.")
 
         elif action == "volume":
             mode = target_clean.lower()
@@ -177,17 +194,17 @@ def execute_system_action(action: str, target: str | None = None) -> JarvisActio
                 ["powershell", "-NoProfile", "-Command", f"(New-Object -ComObject WScript.Shell).SendKeys([char]{key_code})"],
                 timeout=2,
             )
-            return JarvisActionDetails(action="volume", target=mode, success=True, output=f"Volume adjusted: {mode}")
+            return ViperActionDetails(action="volume", target=mode, success=True, output=f"Volume adjusted: {mode}")
 
         elif action == "lock":
             subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], timeout=2)
-            return JarvisActionDetails(action="lock", target="workstation", success=True, output="Workstation locked")
+            return ViperActionDetails(action="lock", target="workstation", success=True, output="Workstation locked")
 
         elif action == "take_note":
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(NOTES_FILE, "a", encoding="utf-8") as f:
                 f.write(f"[{timestamp}] {target_clean}\n")
-            return JarvisActionDetails(action="take_note", target=target_clean, success=True, output="Note recorded")
+            return ViperActionDetails(action="take_note", target=target_clean, success=True, output="Note recorded")
 
         elif action == "read_notes":
             if os.path.exists(NOTES_FILE):
@@ -196,20 +213,70 @@ def execute_system_action(action: str, target: str | None = None) -> JarvisActio
                 output = "".join(lines[-5:]) if lines else "No notes found."
             else:
                 output = "No notes recorded yet, Sir."
-            return JarvisActionDetails(action="read_notes", target=None, success=True, output=output)
+            return ViperActionDetails(action="read_notes", target=None, success=True, output=output)
 
-        return JarvisActionDetails(action=action, target=target_clean, success=False, output="Unknown action")
+        return ViperActionDetails(action=action, target=target_clean, success=False, output="Unknown action")
     except Exception as exc:
-        return JarvisActionDetails(action=action, target=target_clean, success=False, output=str(exc))
+        return ViperActionDetails(action=action, target=target_clean, success=False, output=str(exc))
 
 
-async def process_jarvis_command(
+def _is_contextual_follow_up(text: str) -> bool:
+    starts_with_follow_up = re.match(
+        r"^(?:and\b|then\b|also\b|now\b|next\b|instead\b|do that\b|do the same\b|"
+        r"same for\b|what about\b|how about\b|tell me more\b|continue\b|navigate\b|"
+        r"go there\b|show me\b|find me\b|search for\b|open it\b|open that\b|use it\b|"
+        r"use that\b|play it\b|play that\b|take me there\b)",
+        text,
+    )
+    compound_action = re.search(
+        r"\b(?:and then|then|and)\s+(?:navigate|go|take|show|find|search|open|play|launch|start|use)\b",
+        text,
+    )
+    return bool(starts_with_follow_up or compound_action)
+
+
+async def _respond_with_conversation(
+    cleaned: str,
+    user: User,
+    db: Session,
+    history: list[ChatMessage] | None,
+    telemetry: ViperTelemetryResponse,
+) -> ViperCommandResponse:
+    prompt = (
+        "You are Viper, a warm, capable personal assistant. Say your name as the word 'Viper', "
+        "never spell out the initials. Understand the latest request using the conversation history, "
+        "including references like it, that, there, same, next, and short answers. Continue the current "
+        "task when clear. Use the available desktop and web tools to perform requested actions, and use "
+        "the user's preferred browser for web links. Speak naturally and concisely, without Markdown or lists. "
+        f"Current user turn: {cleaned}"
+    )
+    try:
+        context = ToolContext(user=user, db=db)
+        llm_resp = await reply_to_chat(
+            ChatRequest(message=prompt, history=history or []),
+            context=context,
+        )
+        return ViperCommandResponse(
+            reply=llm_resp.reply,
+            action_taken=f"tools: {', '.join(llm_resp.used_tools)}" if llm_resp.used_tools else None,
+            audio_text=llm_resp.reply,
+            system_status=telemetry,
+        )
+    except Exception:
+        reply = (
+            f"I have received your request: '{cleaned}'. To use conversational AI and follow-up reasoning, "
+            "configure LLM_API_KEY in backend/.env."
+        )
+        return ViperCommandResponse(reply=reply, audio_text=reply, system_status=telemetry)
+
+
+async def process_viper_command(
     message: str,
     user: User,
     db: Session,
     voice_mode: bool = False,
     history: list[ChatMessage] | None = None,
-) -> JarvisCommandResponse:
+) -> ViperCommandResponse:
     raw = message.strip()
     # Normalize common typos
     normalized = re.sub(r"\bopne\b", "open", raw, flags=re.IGNORECASE)
@@ -217,12 +284,55 @@ async def process_jarvis_command(
     normalized = re.sub(r"\blauch\b", "launch", normalized, flags=re.IGNORECASE)
 
     # Strip common wake words and pleasantries
-    cleaned = re.sub(r"^(?:hey\s+jarvis|jarvis|ok\s+jarvis|okay\s+jarvis)\s*,?\s*", "", normalized, flags=re.IGNORECASE).strip()
+    wake_prefix = r"^(?:(?:hey|ok|okay)\s+)?(?:viper|piper|v\s*[.\s]*i\s*[.\s]*p\s*[.\s]*e\s*[.\s]*r|wipe\s+her|jarvis)\s*,?\s*"
+    cleaned = re.sub(wake_prefix, "", normalized, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"^(?:(?:please|can\s+you(?:\s+please)?|could\s+you(?:\s+please)?|would\s+you(?:\s+please)?|will\s+you(?:\s+please)?)\s*,?\s*)+", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = cleaned.strip(" .,!?:;")
     lower = cleaned.lower()
 
     telemetry = get_system_telemetry()
+    last_assistant_turn = next(
+        (item.content.lower() for item in reversed(history or []) if item.role == "assistant"),
+        "",
+    )
+
+    if re.fullmatch(r"(?:close|shut)\s+(?:(?:the|this|that|current|active)\s+)?(?:tab|page)", lower):
+        reply = "I can close the active tab in Brave. Say 'confirm close tab' to proceed."
+        return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
+
+    if lower == "confirm close tab" and "confirm close tab" in last_assistant_turn:
+        closed = close_active_browser_tab(settings.preferred_browser)
+        reply = "Closed the active tab in Brave." if closed else "I couldn't find an open Brave window to close a tab in."
+        return ViperCommandResponse(reply=reply, action_taken="CLOSE_TAB", audio_text=reply, system_status=telemetry)
+
+    if lower in {"close app", "close application", "close that app", "close this app", "close it"}:
+        reply = "Which app should I close? I'll ask you to confirm before closing its window."
+        return ViperCommandResponse(reply=reply, action_taken="CLARIFY_CLOSE_APP", audio_text=reply, system_status=telemetry)
+
+    if "which app should i close" in last_assistant_turn and len(cleaned.split()) <= 4:
+        app_target = cleaned.strip(" .,!?:;")
+        if app_target:
+            reply = f"I can ask {app_target} to close its active window. Say 'confirm close app {app_target}' to proceed."
+            return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
+
+    close_app_match = re.fullmatch(r"(?:close|quit|exit)\s+(?:(?:the|this|that)\s+)?(.+)", cleaned, flags=re.IGNORECASE)
+    if close_app_match and close_app_match.group(1).strip().lower() not in {"tab", "page", "app", "application", "it", "that"}:
+        app_target = close_app_match.group(1).strip(" .,!?:;")
+        reply = f"I can ask {app_target} to close its active window. Say 'confirm close app {app_target}' to proceed."
+        return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
+
+    confirm_app_match = re.fullmatch(r"confirm\s+close\s+app\s+(.+)", cleaned, flags=re.IGNORECASE)
+    if confirm_app_match:
+        app_target = confirm_app_match.group(1).strip(" .,!?:;")
+        if f"confirm close app {app_target.lower()}" in last_assistant_turn:
+            closed = close_app_window(app_target)
+            reply = f"I sent a normal close request to {app_target}." if closed else f"I couldn't find an open window for {app_target}."
+            return ViperCommandResponse(reply=reply, action_taken="CLOSE_APP_WINDOW", audio_text=reply, system_status=telemetry)
+
+    # Send contextual continuations through the conversation model before simple
+    # command patterns can mistake a follow-up for a standalone app name or action.
+    if history and _is_contextual_follow_up(lower):
+        return await _respond_with_conversation(cleaned, user, db, history, telemetry)
 
     # Store download / install directive
     store_match = re.search(r"(?:open\s+)?(?:microsoft\s+store|store)\s+(?:and\s+)?(?:download|install|get)\s+(.+)", lower)
@@ -230,7 +340,7 @@ async def process_jarvis_command(
         app_name = store_match.group(1).strip()
         subprocess.Popen(["cmd", "/c", f"start ms-windows-store://search/?query={urllib.parse.quote(app_name)}"], shell=True)
         reply = f"Opening Microsoft Store to download {app_name} for you now, Sir."
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply=reply,
             action_taken=f"STORE_DOWNLOAD: {app_name}",
             audio_text=reply,
@@ -242,7 +352,7 @@ async def process_jarvis_command(
         app_name = download_match.group(1).strip()
         subprocess.Popen(["cmd", "/c", f"start ms-windows-store://search/?query={urllib.parse.quote(app_name)}"], shell=True)
         reply = f"Opening Microsoft Store for {app_name} installation, Sir."
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply=reply,
             action_taken=f"STORE_SEARCH: {app_name}",
             audio_text=reply,
@@ -251,7 +361,7 @@ async def process_jarvis_command(
 
     # Stop / Quiet directive: abort any speech or action immediately
     if lower in ("stop", "shut up", "be quiet", "silence", "quiet", "cancel", "pause", "halt", "abort", "stop talking", "stop listening", "end conversation", "go to standby"):
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply="Standing by, Sir.",
             action_taken="STOP_DIRECTIVE",
             audio_text="",
@@ -261,7 +371,7 @@ async def process_jarvis_command(
     # 0. Wake Word or Greeting alone
     if not cleaned or lower in ("hello", "hi", "hey", "wake up", "are you there", "online", "status"):
         reply = "At your service, Sir. Listening for your command."
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply=reply,
             action_taken="WAKE_CONFIRMED",
             audio_text="Yes, Sir?",
@@ -272,7 +382,7 @@ async def process_jarvis_command(
         now_hr = datetime.datetime.now().hour
         period = "morning" if now_hr < 12 else "afternoon" if now_hr < 18 else "evening"
         reply = f"Good {period}, Sir. All systems are online and at your command."
-        return JarvisCommandResponse(reply=reply, action_taken="GREETING", audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="GREETING", audio_text=reply, system_status=telemetry)
 
     # 1. System diagnostics / status / hardware check
     system_check_phrases = [
@@ -287,7 +397,7 @@ async def process_jarvis_command(
             f"Memory utilization is at {telemetry.memory_percent}% ({telemetry.memory_used_gb} GB used of {telemetry.memory_total_gb} GB). "
             f"Power is at {telemetry.battery_percent}% ({telemetry.battery_status}), with CPU operating at nominal levels."
         )
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply=reply,
             action_taken="SYSTEM_DIAGNOSTICS",
             audio_text=f"All systems nominal, Sir. Memory is at {telemetry.memory_percent} percent, power is at {telemetry.battery_percent} percent, and operating telemetry is nominal.",
@@ -298,34 +408,34 @@ async def process_jarvis_command(
     if any(k in lower for k in ["what time is it", "current time", "what's the time", "tell me the time"]):
         now_str = datetime.datetime.now().strftime("%I:%M %p")
         reply = f"It is currently {now_str}, Sir."
-        return JarvisCommandResponse(reply=reply, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, audio_text=reply, system_status=telemetry)
 
     if any(k in lower for k in ["what's the date", "what date is it", "today's date", "current date"]):
         date_str = datetime.datetime.now().strftime("%A, %B %d, %Y")
         reply = f"Today is {date_str}, Sir."
-        return JarvisCommandResponse(reply=reply, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, audio_text=reply, system_status=telemetry)
 
     # 3. Volume controls
     if "mute" in lower or "unmute" in lower:
         action = execute_system_action("volume", "mute")
         reply = "Audio output muted, Sir." if "unmute" not in lower else "Audio toggled, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
 
     if "volume up" in lower or "increase volume" in lower or "turn it up" in lower:
         action = execute_system_action("volume", "up")
         reply = "Increasing volume, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
 
     if "volume down" in lower or "decrease volume" in lower or "lower volume" in lower:
         action = execute_system_action("volume", "down")
         reply = "Lowering volume, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="volume", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 4. Lock workstation
     if any(k in lower for k in ["lock pc", "lock computer", "lock screen", "lock workstation", "secure pc"]):
         action = execute_system_action("lock")
         reply = "Securing workstation now, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="lock", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="lock", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 5. Play music / YouTube
     play_match = re.match(r"^(?:play|listen to)\s+(.+?)(?:\s+on\s+youtube)?$", cleaned, flags=re.IGNORECASE)
@@ -333,12 +443,12 @@ async def process_jarvis_command(
         query = play_match.group(1).strip()
         action = execute_system_action("play_music", query)
         reply = f"Searching and playing '{query}' on YouTube, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="play_music", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="play_music", action_details=action, audio_text=reply, system_status=telemetry)
 
     if lower in ("open youtube", "launch youtube", "youtube"):
         action = execute_system_action("open_url", "https://youtube.com")
         reply = "Opening YouTube now, Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="open_url", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="open_url", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 6. Web Search
     search_match = re.match(r"^(?:search\s+(?:for\s+)?|google\s+)(.+)$", cleaned, flags=re.IGNORECASE)
@@ -346,7 +456,7 @@ async def process_jarvis_command(
         query = search_match.group(1).strip()
         action = execute_system_action("search_web", query)
         reply = f"Searching Google for '{query}', Sir."
-        return JarvisCommandResponse(reply=reply, action_taken="search_web", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="search_web", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 7. Open Application
     open_match = re.match(r"^(?:open(?:\s+up)?|launch|start)\s+(.+)$", cleaned, flags=re.IGNORECASE)
@@ -354,7 +464,7 @@ async def process_jarvis_command(
         app_target = open_match.group(1).strip()
         action = execute_system_action("open_app", app_target)
         reply = action.output or (f"Opened {app_target}, Sir." if action.success else f"I couldn't open {app_target}, Sir.")
-        return JarvisCommandResponse(reply=reply, action_taken="open_app", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="open_app", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 8. Note Taking
     note_match = re.match(r"^(?:take a note|take note|remember that|note down)\s+(.+)$", cleaned, flags=re.IGNORECASE)
@@ -362,41 +472,12 @@ async def process_jarvis_command(
         note_content = note_match.group(1).strip()
         action = execute_system_action("take_note", note_content)
         reply = f"Noted, Sir. I have recorded: '{note_content}'"
-        return JarvisCommandResponse(reply=reply, action_taken="take_note", action_details=action, audio_text=reply, system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="take_note", action_details=action, audio_text=reply, system_status=telemetry)
 
     if lower in ("read notes", "show my notes", "what are my notes", "list notes"):
         action = execute_system_action("read_notes")
         reply = f"Here are your latest notes, Sir:\n{action.output}"
-        return JarvisCommandResponse(reply=reply, action_taken="read_notes", action_details=action, audio_text="Here are your latest notes, Sir.", system_status=telemetry)
+        return ViperCommandResponse(reply=reply, action_taken="read_notes", action_details=action, audio_text="Here are your latest notes, Sir.", system_status=telemetry)
 
-    # 9. Conversational intelligence or complex task: Delegate to Assistant LLM
-    jarvis_prompt = (
-        f"[You are J.A.R.V.I.S., a warm, capable personal assistant. Speak naturally, like a thoughtful person in conversation. "
-        f"Use contractions and plain spoken English. Keep answers concise, with natural sentence rhythm. "
-        f"Avoid Markdown, bullet lists, headings, symbol-heavy formatting, and repetitive honorifics because answers are spoken aloud. "
-        f"You can open locally installed desktop apps when asked, as well as use tools for tasks, emails, expenses, documents, flashcards, meals, and workflows. Only claim an app was opened when the tool confirms success.] "
-        f"User command: {cleaned}"
-    )
-
-    try:
-        context = ToolContext(user=user, db=db)
-        chat_req = ChatRequest(message=jarvis_prompt, history=history or [])
-        llm_resp = await reply_to_chat(chat_req, context=context)
-        return JarvisCommandResponse(
-            reply=llm_resp.reply,
-            action_taken=f"tools: {', '.join(llm_resp.used_tools)}" if llm_resp.used_tools else None,
-            audio_text=llm_resp.reply,
-            system_status=telemetry,
-        )
-    except Exception as exc:
-        # If LLM is not configured, provide a polished fallback
-        reply = (
-            f"I have received your command, Sir: '{cleaned}'. "
-            "To unlock full conversational AI reasoning and deep analysis, please configure LLM_API_KEY in backend/.env. "
-            "All direct system controls, web searches, application launches, and local tools are fully operational."
-        )
-        return JarvisCommandResponse(
-            reply=reply,
-            audio_text="At your service, Sir. Ready for your command.",
-            system_status=telemetry,
-        )
+    # Conversational intelligence or complex task: delegate to the assistant model.
+    return await _respond_with_conversation(cleaned, user, db, history, telemetry)

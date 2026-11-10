@@ -2,10 +2,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
+import urllib.parse
 
 from sqlalchemy.orm import Session
 
-from app.core.app_launcher import launch_desktop_app
+from app.core.app_launcher import (
+    launch_desktop_app,
+    navigate_current_browser_tab,
+    open_url_with_preferred_browser,
+)
+from app.core.config import settings
 from app.modules.auth.models import User
 from app.modules.autoflow.service import (
     execute_workflow as autoflow_execute,
@@ -76,6 +82,44 @@ def _open_desktop_app(arguments: dict[str, object], _: ToolContext) -> str:
     app_name = str(arguments.get("app_name", "")).strip()
     success, message = launch_desktop_app(app_name)
     return message if success else f"I couldn't open that app. {message}"
+
+
+def _open_url(arguments: dict[str, object], _: ToolContext) -> str:
+    url = str(arguments.get("url", "")).strip()
+    if not url:
+        return "Please provide a website address."
+    if not url.startswith(("https://", "http://")):
+        url = "https://" + url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return "I can only open valid HTTP or HTTPS website addresses."
+    if open_url_with_preferred_browser(url, settings.preferred_browser):
+        return f"Opened {url} in {settings.preferred_browser}."
+    return f"Couldn't open {url} in {settings.preferred_browser}."
+
+
+def _search_web(arguments: dict[str, object], _: ToolContext) -> str:
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        return "Please provide something to search for."
+    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+    if open_url_with_preferred_browser(url, settings.preferred_browser):
+        return f"Opened web search results for: {query}"
+    return "Couldn't open the preferred browser for that search."
+
+
+def _navigate_current_tab(arguments: dict[str, object], _: ToolContext) -> str:
+    url = str(arguments.get("url", "")).strip()
+    if not url:
+        return "Please provide a website address."
+    if not url.startswith(("https://", "http://")):
+        url = "https://" + url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return "I can only navigate to valid HTTP or HTTPS website addresses."
+    if navigate_current_browser_tab(url, settings.preferred_browser):
+        return f"Navigated the current {settings.preferred_browser} tab to {url}."
+    return f"I couldn't access an open {settings.preferred_browser} window to navigate its current tab."
 
 
 # --- LifeOS Tools ---
@@ -526,6 +570,48 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "open_url",
+            "description": "Open an HTTP or HTTPS website, including a website mentioned in a follow-up request. Use the user's preferred browser. Do not use this for unsupported browser automation or claim page contents were inspected.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Complete website URL to open"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "navigate_current_tab",
+            "description": "Navigate the already-open/current tab in the user's preferred browser. Use this when the user explicitly says same tab, current tab, already-open tab, or do not open a new tab. Do not use open_url for those requests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Complete website URL to navigate the current tab to"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Open web search results for a query in the user's preferred browser. Use for general web searches or when a follow-up asks to find something online.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_server_date",
             "description": "Get the current date and time on the application server.",
             "parameters": {"type": "object", "properties": {}, "required": []},
@@ -821,6 +907,9 @@ TOOL_DEFINITIONS = [
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "open_desktop_app": _open_desktop_app,
+    "open_url": _open_url,
+    "navigate_current_tab": _navigate_current_tab,
+    "search_web": _search_web,
     "get_server_date": _local_date,
     "list_my_tasks": _list_tasks,
     "create_task": _create_task,

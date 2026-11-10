@@ -27,7 +27,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#030712',
-    title: 'J.A.R.V.I.S. - MARK VII',
+    title: 'V.I.P.E.R. - Virtual Intelligent Personal Electronic Respondent',
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,

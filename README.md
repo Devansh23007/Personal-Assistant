@@ -1,6 +1,6 @@
-# Personal Assistant
+# V.I.P.E.R. — Virtual Intelligent Personal Electronic Respondent
 
-Personal Assistant is a modular personal productivity app. This repository is at the **Project Foundation** stage: it has a React + TypeScript dashboard, a FastAPI modular monolith, PostgreSQL setup, account registration/sign-in, and an optional LLM chat endpoint with a read-only tool registry.
+V.I.P.E.R. (Virtual Intelligent Personal Electronic Respondent) is a modular personal productivity assistant. This repository is at the **Project Foundation** stage: it has a React + TypeScript dashboard, a FastAPI modular monolith, PostgreSQL setup, account registration/sign-in, and an optional LLM chat endpoint with a read-only tool registry.
 
 ## Start locally (Windows PowerShell)
 

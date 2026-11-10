@@ -1,9 +1,9 @@
-import { JarvisHUD } from "./JarvisHUD";
+import { ViperHUD } from "./ViperHUD";
 
 function App() {
   return (
-    <div className="jarvis-app-root">
-      <JarvisHUD />
+    <div className="viper-app-root">
+      <ViperHUD />
     </div>
   );
 }

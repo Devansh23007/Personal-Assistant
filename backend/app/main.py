@@ -8,8 +8,8 @@ from app.core.config import settings
 
 
 app = FastAPI(
-    title="Personal Assistant API",
-    description="Backend API for the Personal Assistant application.",
+    title="V.I.P.E.R. API",
+    description="Backend API for the V.I.P.E.R. personal assistant.",
     version="0.1.0",
 )
 

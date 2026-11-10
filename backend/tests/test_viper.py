@@ -1,5 +1,5 @@
-def test_jarvis_telemetry_endpoint(client):
-    response = client.get("/api/jarvis/telemetry")
+def test_viper_telemetry_endpoint(client):
+    response = client.get("/api/viper/telemetry")
     assert response.status_code == 200
     data = response.json()
     assert "memory_percent" in data
@@ -8,10 +8,10 @@ def test_jarvis_telemetry_endpoint(client):
     assert "hostname" in data
 
 
-def test_jarvis_system_diagnostics_command(client):
+def test_viper_system_diagnostics_command(client):
     response = client.post(
-        "/api/jarvis/command",
-        json={"message": "jarvis run system diagnostics", "voice_mode": False},
+        "/api/viper/command",
+        json={"message": "viper run system diagnostics", "voice_mode": False},
     )
     assert response.status_code == 200
     data = response.json()
@@ -20,10 +20,10 @@ def test_jarvis_system_diagnostics_command(client):
     assert data["system_status"] is not None
 
 
-def test_jarvis_time_command(client):
+def test_viper_time_command(client):
     response = client.post(
-        "/api/jarvis/command",
-        json={"message": "Hey Jarvis, what time is it?", "voice_mode": True},
+        "/api/viper/command",
+        json={"message": "Hey Viper, what time is it?", "voice_mode": True},
     )
     assert response.status_code == 200
     data = response.json()
@@ -31,25 +31,25 @@ def test_jarvis_time_command(client):
     assert "currently" in data["reply"].lower()
 
 
-def test_jarvis_take_note_and_read(client):
+def test_viper_take_note_and_read(client):
     note_resp = client.post(
-        "/api/jarvis/command",
-        json={"message": "Jarvis take note meeting with Stark Industries at 3 PM"},
+        "/api/viper/command",
+        json={"message": "Viper take note meeting with Stark Industries at 3 PM"},
     )
     assert note_resp.status_code == 200
     assert "noted" in note_resp.json()["reply"].lower()
 
     read_resp = client.post(
-        "/api/jarvis/command",
-        json={"message": "Jarvis read notes"},
+        "/api/viper/command",
+        json={"message": "Viper read notes"},
     )
     assert read_resp.status_code == 200
     assert "Stark Industries" in read_resp.json()["reply"]
 
 
-def test_jarvis_direct_action_trigger(client):
+def test_viper_direct_action_trigger(client):
     response = client.post(
-        "/api/jarvis/action",
+        "/api/viper/action",
         json={"action": "take_note", "target": "Diagnostic check passed."},
     )
     assert response.status_code == 200

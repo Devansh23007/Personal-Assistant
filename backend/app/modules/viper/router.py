@@ -7,7 +7,7 @@ import urllib.request
 import wave
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -16,28 +16,28 @@ from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.assistant.schemas import ChatMessage
-from app.modules.jarvis.schemas import (
-    JarvisActionDetails,
-    JarvisActionRequest,
-    JarvisCommandRequest,
-    JarvisCommandResponse,
-    JarvisTelemetryResponse,
+from app.modules.viper.schemas import (
+    ViperActionDetails,
+    ViperActionRequest,
+    ViperCommandRequest,
+    ViperCommandResponse,
+    ViperTelemetryResponse,
     SpeechRequest,
 )
-from app.modules.jarvis.service import (
+from app.modules.viper.service import (
     execute_system_action,
     get_system_telemetry,
-    process_jarvis_command,
+    process_viper_command,
     transcribe_audio_bytes,
 )
 
-router = APIRouter(prefix="/jarvis", tags=["JARVIS Core"])
+router = APIRouter(tags=["VIPER Core"])
 
 
-def _needs_more_speech(text: str) -> bool:
+def _needs_more_speech(text: str, history: list[ChatMessage] | None = None) -> bool:
     """Hold obviously incomplete or very short ASR fragments for continuation."""
     normalized = re.sub(r"[^\w\s']", " ", text.lower())
-    normalized = re.sub(r"^(?:hey\s+)?jarvis\s*[, ]*", "", normalized).strip()
+    normalized = re.sub(r"^(?:hey\s+)?viper\s*[, ]*", "", normalized).strip()
     words = normalized.split()
     if not words:
         return False
@@ -54,7 +54,21 @@ def _needs_more_speech(text: str) -> bool:
     # ASR can turn a breath or clipped syllable into a one-word transcript. Don't
     # treat that as a complete request unless it is one of the commands above.
     if len(words) <= 1:
-        return True
+        # A one-word reply is complete when the assistant just asked a clarification
+        # question (for example, the user answering "Brave" to "Which browser?").
+        last_assistant = next(
+            (message.content for message in reversed(history or []) if message.role == "assistant"),
+            "",
+        )
+        is_answer_to_clarification = (
+            "?" in last_assistant
+            and re.search(
+                r"\b(which|what|who|where|when|how|specify|clarify)\b",
+                last_assistant,
+                flags=re.IGNORECASE,
+            ) is not None
+        )
+        return not is_answer_to_clarification
 
     unfinished_endings = {
         "a", "an", "the", "of", "to", "for", "with", "and", "or", "but",
@@ -69,6 +83,34 @@ def _needs_more_speech(text: str) -> bool:
     if re.search(r"\b(?:what(?:'s| is)|tell me)\s+(?:the\s+)?(?:capital|middle|population|weather|distance|meaning)$", normalized):
         return True
     return False
+
+
+def _is_assistant_echo(text: str, history: list[ChatMessage]) -> bool:
+    """Ignore likely speaker-to-microphone echo during barge-in transcription."""
+    words = re.findall(r"[a-z0-9']+", text.lower())
+    if len(words) < 2:
+        return False
+    last_assistant = next(
+        (message.content for message in reversed(history) if message.role == "assistant"),
+        "",
+    )
+    assistant_words = re.findall(r"[a-z0-9']+", last_assistant.lower())
+    if not assistant_words or len(words) > len(assistant_words):
+        return False
+    spoken_phrase = " ".join(words)
+    assistant_text = " ".join(assistant_words)
+    return f" {spoken_phrase} " in f" {assistant_text} "
+
+
+def _is_repeated_gratitude(text: str, history: list[ChatMessage]) -> bool:
+    normalized = " ".join(re.findall(r"[a-z']+", text.lower()))
+    if normalized not in {"thank you", "thanks", "thanks viper", "thank you viper"}:
+        return False
+    last_assistant = next(
+        (message.content.lower() for message in reversed(history) if message.role == "assistant"),
+        "",
+    )
+    return "welcome" in last_assistant
 
 
 def _parse_history(raw_history: str) -> list[ChatMessage]:
@@ -124,7 +166,12 @@ def _request_groq_speech(text: str, voice: str) -> bytes:
     request = urllib.request.Request(
         f"{settings.tts_base_url.rstrip('/')}/audio/speech",
         data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "audio/wav",
+            "User-Agent": "ViperDesktopAssistant/1.0",
+        },
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=45) as response:
@@ -160,20 +207,20 @@ def _join_wav_audio(parts: list[bytes]) -> bytes:
     return output.getvalue()
 
 
-@router.get("/telemetry", response_model=JarvisTelemetryResponse)
-def telemetry() -> JarvisTelemetryResponse:
+@router.get("/telemetry", response_model=ViperTelemetryResponse)
+def telemetry() -> ViperTelemetryResponse:
     """Retrieve real-time PC diagnostic metrics (CPU, Memory, Battery, Host info)."""
     return get_system_telemetry()
 
 
-@router.post("/command", response_model=JarvisCommandResponse)
+@router.post("/command", response_model=ViperCommandResponse)
 async def handle_command(
-    request: JarvisCommandRequest,
+    request: ViperCommandRequest,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> JarvisCommandResponse:
-    """Process a voice or text command for JARVIS, executing system actions or invoking AI tools."""
-    return await process_jarvis_command(
+) -> ViperCommandResponse:
+    """Process a voice or text command for VIPER, executing system actions or invoking AI tools."""
+    return await process_viper_command(
         message=request.message,
         user=user,
         db=db,
@@ -182,8 +229,9 @@ async def handle_command(
     )
 
 
-@router.post("/voice", response_model=JarvisCommandResponse)
+@router.post("/voice", response_model=ViperCommandResponse)
 async def handle_voice_upload(
+    request: Request,
     file: UploadFile = File(...),
     wake_mode: bool = False,
     interrupt_mode: bool = False,
@@ -191,37 +239,40 @@ async def handle_voice_upload(
     history_json: str = Form(default="[]"),
     user: Annotated[User, Depends(get_current_user)] = None,
     db: Annotated[Session, Depends(get_db)] = None,
-) -> JarvisCommandResponse:
+) -> ViperCommandResponse:
     """Accepts raw recorded WAV audio, transcribes it, and executes directive or filters wake word."""
     wav_bytes = await file.read()
     transcribed_text = transcribe_audio_bytes(wav_bytes)
     history = _parse_history(history_json)
     if interrupt_mode:
         if not transcribed_text.strip():
-            return JarvisCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
+            return ViperCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
         normalized = re.sub(r"[^\w\s]", " ", transcribed_text.lower()).strip()
         stop_listening = re.match(
-            r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:stop listening|end conversation|go to standby)$",
+            r"^(?:(?:hey\s+)?viper\s+)?(?:please\s+)?(?:stop listening|end conversation|go to standby)$",
             normalized,
         )
         stop_command = re.match(
-            r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:stop(?:\s+talking)?|be\s+quiet|shut\s+up|silence|cancel|pause|halt|abort)$",
+            r"^(?:(?:hey\s+)?viper\s+)?(?:please\s+)?(?:stop(?:\s+talking)?|be\s+quiet|shut\s+up|silence|cancel|pause|halt|abort)$",
             normalized,
         )
         if stop_listening or stop_command:
-            return JarvisCommandResponse(
+            return ViperCommandResponse(
                 reply="Stopped.",
                 action_taken="STOP_LISTENING" if stop_listening else "STOP_DIRECTIVE",
                 audio_text="",
                 transcript=transcribed_text.strip(),
             )
 
+        if _is_assistant_echo(transcribed_text, history):
+            return ViperCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
+
         # Ignore tiny fragments that are likely to be echo or recognition noise.
         # A normal interruption should contain a short phrase or question.
         if len(normalized.split()) < 2 and normalized not in {"wait", "actually", "sorry", "hold on"}:
-            return JarvisCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
+            return ViperCommandResponse(reply="", action_taken="NO_STOP_DETECTED", audio_text="")
 
-        response = await process_jarvis_command(
+        response = await process_viper_command(
             message=transcribed_text.strip(),
             user=user,
             db=db,
@@ -234,13 +285,13 @@ async def handle_voice_upload(
         return response
     if not transcribed_text.strip():
         if continuation_text.strip():
-            return JarvisCommandResponse(
+            return ViperCommandResponse(
                 reply="I didn't catch the next part. Please continue.",
                 action_taken="CONTINUE_LISTENING",
                 audio_text="",
                 transcript=continuation_text.strip(),
             )
-        return JarvisCommandResponse(
+        return ViperCommandResponse(
             reply="I couldn't hear any distinct directive, Sir. Please try speaking again.",
             audio_text="I couldn't hear you clearly, Sir.",
             action_taken="NO_SPEECH_DETECTED",
@@ -249,29 +300,37 @@ async def handle_voice_upload(
 
     combined_text = " ".join(part.strip() for part in (continuation_text, transcribed_text) if part.strip())
 
-    # In wake_mode, check if the transcription contains "jarvis" or common phonetic variants
+    if _is_repeated_gratitude(combined_text, history):
+        return ViperCommandResponse(reply="", action_taken="ECHO_IGNORED", audio_text="")
+
+    # In wake_mode, check if the transcription contains "viper" or common phonetic variants
     if wake_mode:
         lower_text = combined_text.lower()
         cleaned_for_wake = re.sub(r"[^\w\s]", " ", lower_text)
-        wake_pattern = r"\b(jarvis|hey\s+jarvis|ok\s+jarvis|okay\s+jarvis|travis|service|harvis|javis|jarv)\b"
-        if not re.search(wake_pattern, cleaned_for_wake) and "jarvis" not in cleaned_for_wake:
-            # Not directed at Jarvis: ignore quietly so HUD remains in background listening
-            return JarvisCommandResponse(
+        # ASR may render the acronym as "V.I.P.E.R." or "V I P E R".
+        cleaned_for_wake = re.sub(r"\bv\s+i\s+p\s+e\s+r\b", "viper", cleaned_for_wake)
+        # A still-open legacy client can call the old API path and old wake phrase.
+        if request.url.path.startswith("/api/jarvis/"):
+            cleaned_for_wake = re.sub(r"\b(?:hey\s+)?jarvis\b", "viper", cleaned_for_wake)
+        wake_pattern = r"\b(viper|hey\s+viper|ok\s+viper|okay\s+viper|piper|wiper|wipe\s+her)\b"
+        if not re.search(wake_pattern, cleaned_for_wake):
+            # Not directed at V.I.P.E.R.: ignore quietly so HUD remains in background listening
+            return ViperCommandResponse(
                 reply="",
                 action_taken="WAKE_IGNORED",
                 audio_text="",
                 system_status=get_system_telemetry(),
             )
 
-    if _needs_more_speech(combined_text):
-        return JarvisCommandResponse(
+    if _needs_more_speech(combined_text, history):
+        return ViperCommandResponse(
             reply="Go ahead, I'm listening.",
             action_taken="CONTINUE_LISTENING",
             audio_text="",
             transcript=combined_text,
         )
 
-    resp = await process_jarvis_command(
+    resp = await process_viper_command(
         message=combined_text,
         user=user,
         db=db,
@@ -296,11 +355,22 @@ async def synthesize_speech(request: SpeechRequest) -> Response:
         ]
         audio = _join_wav_audio(audio_parts)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, ValueError, wave.Error) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            provider_error = exc.read().decode("utf-8", errors="replace")[:1000]
+            if "model_terms_required" in provider_error:
+                print("[VIPER TTS] Orpheus terms have not been accepted for this Groq organization.")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Accept the Orpheus model terms in Groq Console to enable natural speech.",
+                ) from exc
+            print(f"[VIPER TTS] Provider returned HTTP {exc.code}: {provider_error}")
+        else:
+            print(f"[VIPER TTS] Speech generation failed: {exc}")
         raise HTTPException(status_code=502, detail="Natural speech generation is unavailable.") from exc
     return Response(content=audio, media_type="audio/wav")
 
 
-@router.post("/action", response_model=JarvisActionDetails)
-def trigger_action(request: JarvisActionRequest) -> JarvisActionDetails:
+@router.post("/action", response_model=ViperActionDetails)
+def trigger_action(request: ViperActionRequest) -> ViperActionDetails:
     """Directly trigger a system automation action (e.g., open app, volume, lock)."""
     return execute_system_action(request.action, request.target)
