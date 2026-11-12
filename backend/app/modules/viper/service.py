@@ -155,9 +155,14 @@ def get_system_telemetry() -> ViperTelemetryResponse:
     )
 
 
-def execute_system_action(action: str, target: str | None = None) -> ViperActionDetails:
+def execute_system_action(
+    action: str,
+    target: str | None = None,
+    preferred_browser: str | None = None,
+) -> ViperActionDetails:
     action = action.lower().strip()
     target_clean = (target or "").strip()
+    browser = preferred_browser or settings.preferred_browser
 
     try:
         if action == "open_app":
@@ -167,20 +172,20 @@ def execute_system_action(action: str, target: str | None = None) -> ViperAction
         elif action in ("search_web", "google"):
             query = target_clean or "Google"
             url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            opened = open_url_with_preferred_browser(url, browser)
             return ViperActionDetails(action="search_web", target=query, success=opened, output=f"Searched Google for: {query}" if opened else "Couldn't open the browser.")
 
         elif action == "open_url":
             url = target_clean
             if not url.startswith("http://") and not url.startswith("https://"):
                 url = f"https://{url}"
-            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            opened = open_url_with_preferred_browser(url, browser)
             return ViperActionDetails(action=action, target=url, success=opened, output=f"Opened {url}" if opened else "Couldn't open the browser.")
 
         elif action in ("play_music", "youtube"):
             query = target_clean or "relaxing music"
             url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-            opened = open_url_with_preferred_browser(url, settings.preferred_browser)
+            opened = open_url_with_preferred_browser(url, browser)
             return ViperActionDetails(action="play_music", target=query, success=opened, output=f"Playing {query} on YouTube" if opened else "Couldn't open the browser.")
 
         elif action == "volume":
@@ -232,7 +237,103 @@ def _is_contextual_follow_up(text: str) -> bool:
         r"\b(?:and then|then|and)\s+(?:navigate|go|take|show|find|search|open|play|launch|start|use)\b",
         text,
     )
-    return bool(starts_with_follow_up or compound_action)
+    # Ordinals and references such as "play the first song" need the prior
+    # conversation (for example, which service or playlist is currently open).
+    contextual_play = re.match(
+        r"^(?:please\s+)?(?:play|skip to|choose|select)\s+(?:(?:the|my|that|this)\s+)?"
+        r"(?:first|next|last|previous|second|third|fourth|fifth|one|song|track|item)\b",
+        text,
+    )
+    return bool(starts_with_follow_up or compound_action or contextual_play)
+
+
+def _browser_from_history(history: list[ChatMessage] | None) -> str | None:
+    """Carry forward the last positive browser choice for the current task."""
+    aliases = (
+        ("Google Chrome", r"google\s+chrome"),
+        ("Chrome", r"chrome"),
+        ("Microsoft Edge", r"microsoft\s+edge"),
+        ("Edge", r"edge"),
+        ("Brave", r"brave(?:\s+browser)?"),
+        ("Firefox", r"(?:mozilla\s+)?firefox"),
+        ("Opera GX", r"opera\s+gx"),
+        ("Opera", r"opera"),
+        ("Vivaldi", r"vivaldi"),
+        ("Safari", r"safari"),
+    )
+    pattern = re.compile("|".join(f"(?P<B{i}>{expr})" for i, (_, expr) in enumerate(aliases)), re.IGNORECASE)
+    for message in reversed(history or []):
+        if message.role != "user":
+            continue
+        matches = list(pattern.finditer(message.content))
+        positive = []
+        for match in matches:
+            preceding = message.content[max(0, match.start() - 18):match.start()]
+            if re.search(r"\bnot\s+(?:(?:on|in|using|with)\s+)?(?:the\s+)?$", preceding, re.IGNORECASE):
+                continue
+            group = next((i for i in range(len(aliases)) if match.group(f"B{i}") is not None), None)
+            if group is not None:
+                positive.append(aliases[group][0])
+        if positive:
+            return positive[-1]
+    return None
+
+
+def _parse_close_request(message: str) -> tuple[str, str] | None:
+    """Return (kind, target) for an explicit close command."""
+    cleaned = re.sub(
+        r"^(?:(?:hey|ok|okay)\s+)?(?:viper|piper|jarvis)\s*,?\s*",
+        "",
+        message.strip(),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"^(?:can|could|would|will)\s+you\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^please\s+", "", cleaned, flags=re.IGNORECASE).strip(" .,!?:;")
+    match = re.fullmatch(
+        r"(?:close|shut|quit|exit)(?:\s+down)?\s+(?:(?:the|this|that|current|active)\s+)?(.+)",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    target = match.group(1).strip(" .,!?:;")
+    if re.search(r"\b(?:tab|page)\b", target, re.IGNORECASE):
+        return ("tab", target)
+    target = re.sub(
+        r"\s+(?:that\s+(?:is|was|has\s+been)|that['’]s|which\s+(?:is|was))\s+"
+        r"(?:currently\s+)?(?:open(?:ed)?|running|active)\b.*$",
+        "",
+        target,
+        flags=re.IGNORECASE,
+    )
+    target = re.sub(r"\s+(?:that\s+is\s+)?open(?:ed)?\s+(?:on|in)\s+(?:the\s+)?desktop$", "", target, flags=re.IGNORECASE)
+    target = re.sub(r"^(?:the|my)\s+", "", target, flags=re.IGNORECASE)
+    target = re.sub(r"^(?:app|application|window)\s+", "", target, flags=re.IGNORECASE)
+    target = re.sub(r"\s+(?:desktop\s+)?(?:app|application|window)$", "", target, flags=re.IGNORECASE)
+    if target.lower() in {"a", "an", "app", "application", "window", "it", "that"}:
+        return None
+    return ("app", target)
+
+
+def _pending_close_request(history: list[ChatMessage] | None) -> tuple[str, str] | None:
+    """Find a close request that Viper explicitly asked the user to confirm."""
+    turns = history or []
+    assistant_index = next(
+        (index for index in range(len(turns) - 1, -1, -1) if turns[index].role == "assistant"),
+        None,
+    )
+    if assistant_index is None:
+        return None
+    assistant_text = turns[assistant_index].content.lower()
+    if "close" not in assistant_text or not re.search(
+        r"\b(?:confirm|proceed|go ahead|should i|shall i|say yes)\b", assistant_text
+    ):
+        return None
+    for previous in reversed(turns[:assistant_index]):
+        if previous.role != "user":
+            continue
+        return _parse_close_request(previous.content)
+    return None
 
 
 async def _respond_with_conversation(
@@ -246,12 +347,17 @@ async def _respond_with_conversation(
         "You are Viper, a warm, capable personal assistant. Say your name as the word 'Viper', "
         "never spell out the initials. Understand the latest request using the conversation history, "
         "including references like it, that, there, same, next, and short answers. Continue the current "
-        "task when clear. Use the available desktop and web tools to perform requested actions, and use "
-        "the user's preferred browser for web links. Speak naturally and concisely, without Markdown or lists. "
+        "task when clear. For every open/launch request, classify the target: use open_desktop_app for "
+        "installed apps and open_url for websites. For a site, domain, or online service, derive its proper "
+        "destination URL from the user's words; keep requested paths or searches in that destination. Treat "
+        "'in <browser> Browser' as the browser choice, not part of the target name; an explicitly named "
+        "browser overrides the preference. If this is a follow-up in a task with a browser already selected, "
+        "keep using that browser unless the user changes it. Use the available "
+        "tools to perform requested actions. Speak naturally and concisely, without Markdown or lists. "
         f"Current user turn: {cleaned}"
     )
     try:
-        context = ToolContext(user=user, db=db)
+        context = ToolContext(user=user, db=db, browser=_browser_from_history(history))
         llm_resp = await reply_to_chat(
             ChatRequest(message=prompt, history=history or []),
             context=context,
@@ -296,13 +402,23 @@ async def process_viper_command(
         "",
     )
 
-    if re.fullmatch(r"(?:close|shut)\s+(?:(?:the|this|that|current|active)\s+)?(?:tab|page)", lower):
-        reply = "I can close the active tab in Brave. Say 'confirm close tab' to proceed."
-        return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
+    affirmative = lower in {"yes", "yes please", "yeah", "yep", "sure", "confirm", "go ahead", "do it", "proceed"}
+    pending_close = _pending_close_request(history)
+    if affirmative and pending_close:
+        close_kind, target = pending_close
+        if close_kind == "tab":
+            browser = _browser_from_history(history) or settings.preferred_browser
+            closed = close_active_browser_tab(browser)
+            reply = f"Closed the active tab in {browser}." if closed else f"I couldn't find an open {browser} window to close a tab in."
+            return ViperCommandResponse(reply=reply, action_taken="CLOSE_TAB", audio_text=reply, system_status=telemetry)
+        closed = close_app_window(target)
+        reply = f"I sent a normal close request to {target}." if closed else f"I couldn't find an open window for {target}."
+        return ViperCommandResponse(reply=reply, action_taken="CLOSE_APP_WINDOW", audio_text=reply, system_status=telemetry)
 
-    if lower == "confirm close tab" and "confirm close tab" in last_assistant_turn:
-        closed = close_active_browser_tab(settings.preferred_browser)
-        reply = "Closed the active tab in Brave." if closed else "I couldn't find an open Brave window to close a tab in."
+    if lower == "confirm close tab" and pending_close and pending_close[0] == "tab":
+        browser = _browser_from_history(history) or settings.preferred_browser
+        closed = close_active_browser_tab(browser)
+        reply = f"Closed the active tab in {browser}." if closed else f"I couldn't find an open {browser} window to close a tab in."
         return ViperCommandResponse(reply=reply, action_taken="CLOSE_TAB", audio_text=reply, system_status=telemetry)
 
     if lower in {"close app", "close application", "close that app", "close this app", "close it"}:
@@ -315,16 +431,21 @@ async def process_viper_command(
             reply = f"I can ask {app_target} to close its active window. Say 'confirm close app {app_target}' to proceed."
             return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
 
-    close_app_match = re.fullmatch(r"(?:close|quit|exit)\s+(?:(?:the|this|that)\s+)?(.+)", cleaned, flags=re.IGNORECASE)
-    if close_app_match and close_app_match.group(1).strip().lower() not in {"tab", "page", "app", "application", "it", "that"}:
-        app_target = close_app_match.group(1).strip(" .,!?:;")
-        reply = f"I can ask {app_target} to close its active window. Say 'confirm close app {app_target}' to proceed."
+    parsed_close = _parse_close_request(cleaned)
+    if parsed_close and parsed_close[0] == "tab":
+        browser = _browser_from_history([ChatMessage(role="user", content=cleaned)]) or _browser_from_history(history) or settings.preferred_browser
+        reply = f"I can close the active tab in {browser}. Should I close it? Say yes to confirm."
+        return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
+
+    if parsed_close and parsed_close[0] == "app":
+        app_target = parsed_close[1]
+        reply = f"I can ask {app_target} to close its active window. Should I close it? Say yes to confirm."
         return ViperCommandResponse(reply=reply, action_taken="CONFIRMATION_REQUIRED", audio_text=reply, system_status=telemetry)
 
     confirm_app_match = re.fullmatch(r"confirm\s+close\s+app\s+(.+)", cleaned, flags=re.IGNORECASE)
     if confirm_app_match:
         app_target = confirm_app_match.group(1).strip(" .,!?:;")
-        if f"confirm close app {app_target.lower()}" in last_assistant_turn:
+        if pending_close and pending_close[0] == "app" and pending_close[1].casefold() == app_target.casefold():
             closed = close_app_window(app_target)
             reply = f"I sent a normal close request to {app_target}." if closed else f"I couldn't find an open window for {app_target}."
             return ViperCommandResponse(reply=reply, action_taken="CLOSE_APP_WINDOW", audio_text=reply, system_status=telemetry)
@@ -358,6 +479,11 @@ async def process_viper_command(
             audio_text=reply,
             system_status=telemetry,
         )
+
+    # Route every open/launch request through the assistant's generic
+    # app-versus-website classifier. Keep this after explicit install requests.
+    if re.match(r"^(?:open(?:\s+up)?|launch|start)\s+", lower):
+        return await _respond_with_conversation(cleaned, user, db, history, telemetry)
 
     # Stop / Quiet directive: abort any speech or action immediately
     if lower in ("stop", "shut up", "be quiet", "silence", "quiet", "cancel", "pause", "halt", "abort", "stop talking", "stop listening", "end conversation", "go to standby"):
@@ -445,11 +571,6 @@ async def process_viper_command(
         reply = f"Searching and playing '{query}' on YouTube, Sir."
         return ViperCommandResponse(reply=reply, action_taken="play_music", action_details=action, audio_text=reply, system_status=telemetry)
 
-    if lower in ("open youtube", "launch youtube", "youtube"):
-        action = execute_system_action("open_url", "https://youtube.com")
-        reply = "Opening YouTube now, Sir."
-        return ViperCommandResponse(reply=reply, action_taken="open_url", action_details=action, audio_text=reply, system_status=telemetry)
-
     # 6. Web Search
     search_match = re.match(r"^(?:search\s+(?:for\s+)?|google\s+)(.+)$", cleaned, flags=re.IGNORECASE)
     if search_match:
@@ -457,14 +578,6 @@ async def process_viper_command(
         action = execute_system_action("search_web", query)
         reply = f"Searching Google for '{query}', Sir."
         return ViperCommandResponse(reply=reply, action_taken="search_web", action_details=action, audio_text=reply, system_status=telemetry)
-
-    # 7. Open Application
-    open_match = re.match(r"^(?:open(?:\s+up)?|launch|start)\s+(.+)$", cleaned, flags=re.IGNORECASE)
-    if open_match:
-        app_target = open_match.group(1).strip()
-        action = execute_system_action("open_app", app_target)
-        reply = action.output or (f"Opened {app_target}, Sir." if action.success else f"I couldn't open {app_target}, Sir.")
-        return ViperCommandResponse(reply=reply, action_taken="open_app", action_details=action, audio_text=reply, system_status=telemetry)
 
     # 8. Note Taking
     note_match = re.match(r"^(?:take a note|take note|remember that|note down)\s+(.+)$", cleaned, flags=re.IGNORECASE)

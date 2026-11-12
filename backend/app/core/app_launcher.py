@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 import sys
-import webbrowser
 
 
 APP_ALIASES = {
@@ -126,25 +125,61 @@ exit 2
 def open_url_with_preferred_browser(url: str, preferred_browser: str = "Brave") -> bool:
     """Open a URL in the requested browser, falling back to the OS default."""
     browser = preferred_browser.strip().lower()
-    if browser == "brave":
-        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
-        program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-        local_app_data = os.environ.get("LOCALAPPDATA", "")
-        candidates = [
-            shutil.which("brave.exe"),
-            shutil.which("brave"),
+    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    browser_candidates = {
+        "brave": [
+            shutil.which("brave.exe"), shutil.which("brave"),
             os.path.join(program_files, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
             os.path.join(program_files_x86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
             os.path.join(local_app_data, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-        ]
-        executable = next((candidate for candidate in candidates if candidate and os.path.isfile(candidate)), None)
-        if executable:
-            try:
-                subprocess.Popen([executable, url], shell=False)
-                return True
-            except OSError:
-                pass
-    return bool(webbrowser.open(url))
+        ],
+        "brave browser": [
+            shutil.which("brave.exe"),
+            os.path.join(program_files, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+            os.path.join(local_app_data, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        ],
+        "chrome": [
+            shutil.which("chrome.exe"), shutil.which("chrome"),
+            os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(program_files_x86, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(local_app_data, "Google", "Chrome", "Application", "chrome.exe"),
+        ],
+        "google chrome": [
+            shutil.which("chrome.exe"),
+            os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(program_files_x86, "Google", "Chrome", "Application", "chrome.exe"),
+        ],
+        "edge": [
+            shutil.which("msedge.exe"), shutil.which("msedge"),
+            os.path.join(program_files, "Microsoft", "Edge", "Application", "msedge.exe"),
+            os.path.join(program_files_x86, "Microsoft", "Edge", "Application", "msedge.exe"),
+        ],
+        "microsoft edge": [
+            shutil.which("msedge.exe"),
+            os.path.join(program_files, "Microsoft", "Edge", "Application", "msedge.exe"),
+            os.path.join(program_files_x86, "Microsoft", "Edge", "Application", "msedge.exe"),
+        ],
+    }
+    # Support browsers beyond the common bundled choices when their command is
+    # on PATH (for example Firefox, Vivaldi, Opera, or a user-installed one).
+    command_name = re.sub(r"\s+browser$", "", browser).strip()
+    generic_candidates = [
+        shutil.which(command_name),
+        shutil.which(command_name.replace(" ", "")),
+        shutil.which(command_name.replace(" ", "") + ".exe"),
+    ]
+    candidates = [*browser_candidates.get(browser, []), *generic_candidates]
+    executable = next((candidate for candidate in candidates if candidate and os.path.isfile(candidate)), None)
+    if executable:
+        try:
+            subprocess.Popen([executable, url], shell=False)
+            return True
+        except OSError:
+            pass
+    # Don't silently open in a different browser than the one requested.
+    return False
 
 
 def _run_hidden_powershell(script: str) -> bool:
@@ -164,7 +199,7 @@ def _run_hidden_powershell(script: str) -> bool:
 
 def navigate_current_browser_tab(url: str, preferred_browser: str = "Brave") -> bool:
     """Navigate the active tab in the preferred browser without opening a new tab."""
-    if os.name != "nt" or preferred_browser.strip().lower() != "brave":
+    if os.name != "nt" or not preferred_browser.strip():
         return False
     if not url.startswith(("https://", "http://")):
         url = "https://" + url
@@ -187,10 +222,25 @@ exit 0
 
 
 def close_active_browser_tab(preferred_browser: str = "Brave") -> bool:
-    """Close the active tab in the preferred browser using a normal Ctrl+W request."""
-    if os.name != "nt" or preferred_browser.strip().lower() != "brave":
+    """Close the active tab in the requested browser with a normal Ctrl+W request."""
+    if os.name != "nt" or not preferred_browser.strip():
         return False
-    encoded_browser = base64.b64encode(preferred_browser.encode("utf-8")).decode("ascii")
+    browser = " ".join(preferred_browser.strip().lower().split())
+    window_name = {
+        "google chrome": "Chrome",
+        "chrome": "Chrome",
+        "microsoft edge": "Edge",
+        "edge": "Edge",
+        "brave browser": "Brave",
+        "brave": "Brave",
+        "mozilla firefox": "Firefox",
+        "firefox": "Firefox",
+        "opera gx": "Opera GX",
+        "opera": "Opera",
+        "vivaldi": "Vivaldi",
+        "safari": "Safari",
+    }.get(browser, preferred_browser.strip())
+    encoded_browser = base64.b64encode(window_name.encode("utf-8")).decode("ascii")
     script = rf"""
 $browser = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_browser}'))
 $shell = New-Object -ComObject WScript.Shell
@@ -232,12 +282,25 @@ def close_app_window(target: str) -> bool:
     }
     process_name = process_names.get(normalized, re.sub(r"[^a-z0-9]", "", normalized))
     encoded_process = base64.b64encode(process_name.encode("utf-8")).decode("ascii")
+    encoded_target = base64.b64encode(target.strip().encode("utf-8")).decode("ascii")
     script = rf"""
 $processName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_process}'))
-$process = Get-Process -Name $processName -ErrorAction SilentlyContinue | Where-Object {{ $_.MainWindowHandle -ne 0 }} | Select-Object -First 1
-if (-not $process) {{ exit 2 }}
+$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_target}'))
+$process = Get-Process -ErrorAction SilentlyContinue | Where-Object {{
+    $_.MainWindowHandle -ne 0 -and (
+        $_.ProcessName -ieq $processName -or
+        $_.MainWindowTitle -like "*$target*" -or
+        ($_.Path -and [IO.Path]::GetFileNameWithoutExtension($_.Path) -ieq $processName)
+    )
+}} | Select-Object -First 1
 $shell = New-Object -ComObject WScript.Shell
-if (-not $shell.AppActivate([int]$process.Id)) {{ exit 3 }}
+if ($process) {{
+    $activated = $shell.AppActivate([int]$process.Id)
+}} else {{
+    # Packaged apps can expose a useful window title under a different process name.
+    $activated = $shell.AppActivate($target)
+}}
+if (-not $activated) {{ exit 2 }}
 Start-Sleep -Milliseconds 150
 $shell.SendKeys('%{{F4}}')
 exit 0

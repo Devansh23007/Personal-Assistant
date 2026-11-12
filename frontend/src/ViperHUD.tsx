@@ -259,6 +259,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
   const hasSpokenRef = useRef<boolean>(false);
   const silenceFramesRef = useRef<number>(0);
   const totalFramesRef = useRef<number>(0);
+  const speechOnsetChunksRef = useRef<Float32Array[]>([]);
   const ambientNoiseRef = useRef<number>(0.008);
   const audioLevelRef = useRef<number>(0);
   const pendingTranscriptRef = useRef<string>("");
@@ -525,6 +526,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     hasSpokenRef.current = false;
     silenceFramesRef.current = 0;
     totalFramesRef.current = 0;
+    speechOnsetChunksRef.current = [];
     captureModeRef.current = "direct";
     isConversationActiveRef.current = true;
     isCapturingRef.current = true;
@@ -538,6 +540,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     hasSpokenRef.current = false;
     silenceFramesRef.current = 0;
     totalFramesRef.current = 0;
+    speechOnsetChunksRef.current = [];
     captureModeRef.current = "direct";
     isCapturingRef.current = false;
     setHudState("listening");
@@ -940,6 +943,13 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             sum += inputData[i] * inputData[i];
           }
           const rms = Math.sqrt(sum / inputData.length);
+          let zeroCrossings = 0;
+          for (let i = 1; i < inputData.length; i++) {
+            if ((inputData[i - 1] >= 0) !== (inputData[i] >= 0)) zeroCrossings++;
+          }
+          const zeroCrossingRate = zeroCrossings / inputData.length;
+          // Broadly reject steady tones (horns) and isolated broadband clicks.
+          const speechLikeFrame = zeroCrossingRate >= 0.015 && zeroCrossingRate <= 0.32;
           audioLevelRef.current = rms;
           setLiveVolume(Math.min(100, Math.round(rms * 500)));
 
@@ -953,24 +963,35 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
           const silenceThreshold = Math.max(0.010, ambientNoiseRef.current * 1.25);
 
           if (hudStateRef.current === "speaking") {
-            if (!isCapturingRef.current && rms > interruptSpeechThreshold) {
-              isCapturingRef.current = true;
-              captureModeRef.current = "interrupt";
-              hasSpokenRef.current = true;
-              silenceFramesRef.current = 0;
-              totalFramesRef.current = 1;
-              recordedChunksRef.current = [new Float32Array(inputData)];
-              isBargeInPendingRef.current = true;
-              setMicStatusMsg("I heard you. Interrupting my response...");
-              cancelSpeechOutput();
+            if (!isCapturingRef.current) {
+              if (rms > interruptSpeechThreshold && speechLikeFrame) {
+                speechOnsetChunksRef.current.push(new Float32Array(inputData));
+                if (speechOnsetChunksRef.current.length > 4) speechOnsetChunksRef.current.shift();
+                if (speechOnsetChunksRef.current.length >= 3) {
+                  isCapturingRef.current = true;
+                  captureModeRef.current = "interrupt";
+                  hasSpokenRef.current = true;
+                  silenceFramesRef.current = 0;
+                  totalFramesRef.current = speechOnsetChunksRef.current.length;
+                  recordedChunksRef.current = speechOnsetChunksRef.current;
+                  speechOnsetChunksRef.current = [];
+                  isBargeInPendingRef.current = true;
+                  setMicStatusMsg("I heard you. Interrupting my response...");
+                  cancelSpeechOutput();
+                }
+              } else {
+                speechOnsetChunksRef.current = [];
+              }
               return;
             }
             if (isCapturingRef.current && captureModeRef.current === "interrupt") {
               recordedChunksRef.current.push(new Float32Array(inputData));
               totalFramesRef.current++;
-              if (rms > interruptSpeechThreshold) silenceFramesRef.current = 0;
+              if (rms > interruptSpeechThreshold && speechLikeFrame) silenceFramesRef.current = 0;
               else if (rms < silenceThreshold) silenceFramesRef.current++;
-              if (silenceFramesRef.current >= 4 || totalFramesRef.current >= 140) {
+              // Let a short hesitation between words pass before submitting an
+              // interruption; ScriptProcessor buffers are about 85–93 ms.
+              if (silenceFramesRef.current >= 14 || totalFramesRef.current >= 140) {
                 finalizeAudioRef.current();
               }
             }
@@ -984,14 +1005,21 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             !isCapturingRef.current
           ) {
             const conversationThreshold = Math.max(0.009, ambientNoiseRef.current * 1.35);
-            if (rms > conversationThreshold) {
-              isCapturingRef.current = true;
-              captureModeRef.current = "direct";
-              hasSpokenRef.current = true;
-              silenceFramesRef.current = 0;
-              totalFramesRef.current = 1;
-              recordedChunksRef.current = [new Float32Array(inputData)];
-              setMicStatusMsg("🎙️ Hearing you — speak naturally; I’m following the conversation.");
+            if (rms > conversationThreshold && speechLikeFrame) {
+              speechOnsetChunksRef.current.push(new Float32Array(inputData));
+              if (speechOnsetChunksRef.current.length > 4) speechOnsetChunksRef.current.shift();
+              if (speechOnsetChunksRef.current.length >= 3) {
+                isCapturingRef.current = true;
+                captureModeRef.current = "direct";
+                hasSpokenRef.current = true;
+                silenceFramesRef.current = 0;
+                totalFramesRef.current = speechOnsetChunksRef.current.length;
+                recordedChunksRef.current = speechOnsetChunksRef.current;
+                speechOnsetChunksRef.current = [];
+                setMicStatusMsg("🎙️ Hearing you — speak naturally; I’m following the conversation.");
+              }
+            } else {
+              speechOnsetChunksRef.current = [];
             }
             return;
           }
@@ -1003,14 +1031,21 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             !isCapturingRef.current &&
             hudStateRef.current === "armed"
           ) {
-            if (rms > wakeSpeechThreshold) {
-              isCapturingRef.current = true;
-              captureModeRef.current = "wake";
-              hasSpokenRef.current = true;
-              silenceFramesRef.current = 0;
-              totalFramesRef.current = 1;
-              recordedChunksRef.current = [new Float32Array(inputData)];
-              setMicStatusMsg("Wake phrase detected — checking for 'Hey Viper'...");
+            if (rms > wakeSpeechThreshold && speechLikeFrame) {
+              speechOnsetChunksRef.current.push(new Float32Array(inputData));
+              if (speechOnsetChunksRef.current.length > 4) speechOnsetChunksRef.current.shift();
+              if (speechOnsetChunksRef.current.length >= 3) {
+                isCapturingRef.current = true;
+                captureModeRef.current = "wake";
+                hasSpokenRef.current = true;
+                silenceFramesRef.current = 0;
+                totalFramesRef.current = speechOnsetChunksRef.current.length;
+                recordedChunksRef.current = speechOnsetChunksRef.current;
+                speechOnsetChunksRef.current = [];
+                setMicStatusMsg("Wake phrase detected — checking for 'Hey Viper'...");
+              }
+            } else {
+              speechOnsetChunksRef.current = [];
             }
             return;
           }
@@ -1026,11 +1061,20 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
               ? interruptSpeechThreshold
               : directSpeechThreshold;
 
-            if (rms > currentSpeechThreshold) {
-              hasSpokenRef.current = true;
-              silenceFramesRef.current = 0;
-              if (captureModeRef.current === "direct") {
-                setMicStatusMsg("🎙️ Hearing your voice... Pause when finished or click Core.");
+            if (rms > currentSpeechThreshold && speechLikeFrame) {
+              if (!hasSpokenRef.current) {
+                speechOnsetChunksRef.current.push(new Float32Array(inputData));
+                if (speechOnsetChunksRef.current.length > 4) speechOnsetChunksRef.current.shift();
+                if (speechOnsetChunksRef.current.length >= 3) {
+                  hasSpokenRef.current = true;
+                  speechOnsetChunksRef.current = [];
+                }
+              }
+              if (hasSpokenRef.current) {
+                silenceFramesRef.current = 0;
+                if (captureModeRef.current === "direct") {
+                  setMicStatusMsg("🎙️ Hearing your voice... Pause when finished or click Core.");
+                }
               }
             } else if (rms < silenceThreshold) {
               if (hasSpokenRef.current) {
@@ -1038,11 +1082,13 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
               }
             }
 
-            // NATURAL SILENCE ENDPOINTING:
-            // Short acoustic hangover for the current batch-transcription flow.
-            // Smarter end-of-turn detection should replace this fixed threshold.
-            const silenceFrameLimit = captureModeRef.current === "wake" ? 10 : 26;
-            if (hasSpokenRef.current && silenceFramesRef.current >= silenceFrameLimit) {
+            // End the turn only after sustained silence. Calculate from actual
+            // audio buffer duration so a one-second hesitation does not submit
+            // the command, even when the browser's audio sample rate differs.
+            const silenceDurationMs =
+              (silenceFramesRef.current * inputData.length * 1000) / ctx.sampleRate;
+            const silenceLimitMs = captureModeRef.current === "wake" ? 2800 : 3200;
+            if (hasSpokenRef.current && silenceDurationMs >= silenceLimitMs) {
               finalizeAudioRef.current();
               return;
             }
@@ -1442,32 +1488,20 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
           </div>
 
           {/* Quick Actions Chips */}
-          <div className="viper-quick-chips">
-            <span className="chips-title">RAPID DIRECTIVES:</span>
+      <div className="viper-quick-chips">
+            <span className="chips-title">QUICK ACTIONS</span>
             <div className="chips-row">
-              <button type="button" onClick={() => executeTextCommand("Hey Viper")}>
-                ⚡ Wake Assistant
-              </button>
               <button type="button" onClick={() => executeTextCommand("check my system")}>
-                📊 Check System
+                System status
               </button>
               <button type="button" onClick={() => executeTextCommand("Open YouTube")}>
-                ▶ YouTube
+                Open YouTube
               </button>
               <button type="button" onClick={() => executeTextCommand("Open Google Chrome")}>
-                🌐 Chrome
-              </button>
-              <button type="button" onClick={() => executeTextCommand("Mute audio")}>
-                🔇 Mute
+                Open Chrome
               </button>
               <button type="button" onClick={() => executeTextCommand("What time is it?")}>
-                ⏱ Time
-              </button>
-              <button type="button" onClick={() => executeTextCommand("Lock workstation")}>
-                🔒 Lock PC
-              </button>
-              <button type="button" onClick={() => executeTextCommand("Read my notes")}>
-                📝 Notes
+                What time is it?
               </button>
             </div>
           </div>
@@ -1477,7 +1511,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
         <div className="viper-terminal-section">
           <div className="terminal-header">
             <div className="terminal-title">
-              <span className="terminal-dot"></span> DIRECTIVE LOG & SYSTEM PROTOCOLS
+              <span className="terminal-dot"></span> CONVERSATION
             </div>
             <div className="terminal-actions">
               <button
@@ -1494,13 +1528,13 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
                   ])
                 }
               >
-                CLEAR LOG
+                Clear
               </button>
             </div>
           </div>
 
           <div className="terminal-body">
-            {logs.map((log) => (
+            {logs.filter((log) => log.id !== "init").map((log) => (
               <div key={log.id} className={`terminal-entry entry-${log.type}`}>
                 <div className="entry-meta">
                   <span className="entry-time">{log.timestamp}</span>
@@ -1510,6 +1544,13 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
                 <div className="entry-content">{log.text}</div>
               </div>
             ))}
+            {logs.every((log) => log.id === "init") && (
+              <div className="conversation-empty-state">
+                <span className="conversation-empty-logo" aria-hidden="true">V</span>
+                <strong>How can I help?</strong>
+                <span>Ask a question, give a voice command, or type below.</span>
+              </div>
+            )}
           </div>
 
           {/* Manual Input Command Bar */}
@@ -1517,12 +1558,12 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             <span className="input-prompt">&gt;</span>
             <input
               type="text"
-              placeholder="Enter voice command or type directive here (e.g. 'check my system', 'open spotify', 'stop')..."
+              placeholder="Type a message or voice command..."
               value={commandInput}
               onChange={(e) => setCommandInput(e.target.value)}
             />
             <button type="submit" className="terminal-send-btn">
-              TRANSMIT
+              Send
             </button>
           </form>
         </div>

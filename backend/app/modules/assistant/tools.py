@@ -67,6 +67,7 @@ from app.modules.spendwise.service import (
 class ToolContext:
     user: User | None = None
     db: Session | None = None
+    browser: str | None = None
 
 
 ToolHandler = Callable[[dict[str, object], ToolContext], str]
@@ -84,7 +85,7 @@ def _open_desktop_app(arguments: dict[str, object], _: ToolContext) -> str:
     return message if success else f"I couldn't open that app. {message}"
 
 
-def _open_url(arguments: dict[str, object], _: ToolContext) -> str:
+def _open_url(arguments: dict[str, object], context: ToolContext) -> str:
     url = str(arguments.get("url", "")).strip()
     if not url:
         return "Please provide a website address."
@@ -93,22 +94,24 @@ def _open_url(arguments: dict[str, object], _: ToolContext) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return "I can only open valid HTTP or HTTPS website addresses."
-    if open_url_with_preferred_browser(url, settings.preferred_browser):
-        return f"Opened {url} in {settings.preferred_browser}."
-    return f"Couldn't open {url} in {settings.preferred_browser}."
+    browser = str(arguments.get("browser") or context.browser or settings.preferred_browser).strip()
+    if open_url_with_preferred_browser(url, browser):
+        return f"Opened {url} in {browser}."
+    return f"Couldn't open {url} in {browser}."
 
 
-def _search_web(arguments: dict[str, object], _: ToolContext) -> str:
+def _search_web(arguments: dict[str, object], context: ToolContext) -> str:
     query = str(arguments.get("query", "")).strip()
     if not query:
         return "Please provide something to search for."
+    browser = str(arguments.get("browser") or context.browser or settings.preferred_browser).strip()
     url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-    if open_url_with_preferred_browser(url, settings.preferred_browser):
-        return f"Opened web search results for: {query}"
-    return "Couldn't open the preferred browser for that search."
+    if open_url_with_preferred_browser(url, browser):
+        return f"Opened web search results for: {query} in {browser}."
+    return f"Couldn't open {browser} for that search."
 
 
-def _navigate_current_tab(arguments: dict[str, object], _: ToolContext) -> str:
+def _navigate_current_tab(arguments: dict[str, object], context: ToolContext) -> str:
     url = str(arguments.get("url", "")).strip()
     if not url:
         return "Please provide a website address."
@@ -117,9 +120,10 @@ def _navigate_current_tab(arguments: dict[str, object], _: ToolContext) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return "I can only navigate to valid HTTP or HTTPS website addresses."
-    if navigate_current_browser_tab(url, settings.preferred_browser):
-        return f"Navigated the current {settings.preferred_browser} tab to {url}."
-    return f"I couldn't access an open {settings.preferred_browser} window to navigate its current tab."
+    browser = str(arguments.get("browser") or context.browser or settings.preferred_browser).strip()
+    if navigate_current_browser_tab(url, browser):
+        return f"Navigated the current {browser} tab to {url}."
+    return f"I couldn't access an open {browser} window to navigate its current tab."
 
 
 # --- LifeOS Tools ---
@@ -571,11 +575,12 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "open_url",
-            "description": "Open an HTTP or HTTPS website, including a website mentioned in a follow-up request. Use the user's preferred browser. Do not use this for unsupported browser automation or claim page contents were inspected.",
+            "description": "Open a requested website or URL. Use the user's preferred browser unless the user explicitly named another browser, in which case pass that browser name. For open/launch requests, use this for websites and open_desktop_app for installed applications. Do not claim page contents were inspected.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "Complete website URL to open"},
+                    "browser": {"type": "string", "description": "Optional browser explicitly requested by the user; otherwise omit to use their preference"},
                 },
                 "required": ["url"],
             },
@@ -585,11 +590,12 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "navigate_current_tab",
-            "description": "Navigate the already-open/current tab in the user's preferred browser. Use this when the user explicitly says same tab, current tab, already-open tab, or do not open a new tab. Do not use open_url for those requests.",
+            "description": "Navigate the already-open/current tab in the user's preferred browser, or another explicitly named browser. Use this when the user explicitly says same tab, current tab, already-open tab, or do not open a new tab. Do not use open_url for those requests.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "Complete website URL to navigate the current tab to"},
+                    "browser": {"type": "string", "description": "Optional browser explicitly requested by the user; otherwise omit to use their preference"},
                 },
                 "required": ["url"],
             },
@@ -599,11 +605,12 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Open web search results for a query in the user's preferred browser. Use for general web searches or when a follow-up asks to find something online.",
+            "description": "Open web search results for a query. Use the user's preferred browser unless they explicitly requested a different browser, then pass that browser name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "What to search for"},
+                    "browser": {"type": "string", "description": "Optional browser explicitly requested by the user; otherwise omit to use their preference"},
                 },
                 "required": ["query"],
             },
