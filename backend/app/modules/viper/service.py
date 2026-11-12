@@ -102,43 +102,74 @@ def get_system_telemetry() -> ViperTelemetryResponse:
 
     if platform.system() == "Windows":
         try:
-            ps_cmd = (
-                "$os = Get-CimInstance Win32_OperatingSystem; "
-                "$tot = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2); "
-                "$free = [math]::Round($os.FreePhysicalMemory / 1MB, 2); "
-                "$used = [math]::Round($tot - $free, 2); "
-                "$pct = [math]::Round(($used / $tot) * 100, 1); "
-                "Write-Output \"$used|$tot|$pct\""
-            )
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            if res.returncode == 0 and "|" in res.stdout:
-                parts = res.stdout.strip().split("|")
-                mem_used_gb = float(parts[0])
-                mem_total_gb = float(parts[1])
-                mem_percent = float(parts[2])
+            import ctypes
+            import ctypes.wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.wintypes.DWORD),
+                    ("dwMemoryLoad", ctypes.wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                tot = stat.ullTotalPhys / (1024**3)
+                free = stat.ullAvailPhys / (1024**3)
+                mem_total_gb = round(tot, 2)
+                mem_used_gb = round(tot - free, 2)
+                mem_percent = float(stat.dwMemoryLoad)
         except Exception:
             pass
 
         try:
-            bat_cmd = (
-                "$bat = Get-CimInstance Win32_Battery; "
-                "if ($bat) { Write-Output \"$($bat.EstimatedChargeRemaining)|$($bat.BatteryStatus)\" } else { Write-Output '100|2' }"
-            )
-            bat_res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", bat_cmd],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            if bat_res.returncode == 0 and "|" in bat_res.stdout:
-                bparts = bat_res.stdout.strip().split("|")
-                battery_percent = int(bparts[0])
-                battery_status = "Charging / AC" if bparts[1] == "2" else "On Battery"
+            import ctypes
+            import ctypes.wintypes
+
+            class SYSTEM_POWER_STATUS(ctypes.Structure):
+                _fields_ = [
+                    ("ACLineStatus", ctypes.c_byte),
+                    ("BatteryFlag", ctypes.c_byte),
+                    ("BatteryLifePercent", ctypes.c_byte),
+                    ("SystemStatusFlag", ctypes.c_byte),
+                    ("BatteryLifeTime", ctypes.wintypes.DWORD),
+                    ("BatteryFullLifeTime", ctypes.wintypes.DWORD),
+                ]
+
+            pstat = SYSTEM_POWER_STATUS()
+            if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(pstat)):
+                if pstat.BatteryLifePercent != 255 and pstat.BatteryLifePercent >= 0:
+                    battery_percent = int(pstat.BatteryLifePercent)
+                battery_status = "Charging / AC" if pstat.ACLineStatus == 1 else "On Battery"
+        except Exception:
+            pass
+
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class FILETIME(ctypes.Structure):
+                _fields_ = [("dwLowDateTime", ctypes.wintypes.DWORD), ("dwHighDateTime", ctypes.wintypes.DWORD)]
+
+            def _to_i(ft):
+                return (ft.dwHighDateTime << 32) + ft.dwLowDateTime
+
+            idle1, kernel1, user1 = FILETIME(), FILETIME(), FILETIME()
+            idle2, kernel2, user2 = FILETIME(), FILETIME(), FILETIME()
+            ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle1), ctypes.byref(kernel1), ctypes.byref(user1))
+            time.sleep(0.03)
+            ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle2), ctypes.byref(kernel2), ctypes.byref(user2))
+            idle_delta = _to_i(idle2) - _to_i(idle1)
+            total_delta = (_to_i(kernel2) - _to_i(kernel1)) + (_to_i(user2) - _to_i(user1))
+            if total_delta > 0:
+                cpu_percent = round(max(0.0, min(100.0, (1.0 - (idle_delta / total_delta)) * 100.0)), 1)
         except Exception:
             pass
 

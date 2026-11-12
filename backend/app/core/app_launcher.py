@@ -253,56 +253,83 @@ exit 0
 
 
 def close_app_window(target: str) -> bool:
-    """Ask a matching app window to close gracefully with Alt+F4; never force-kill it."""
+    """Request a graceful app-managed close for a matching desktop window."""
     if os.name != "nt" or not target.strip():
         return False
     normalized = " ".join(target.lower().split())
-    normalized = APP_ALIASES.get(normalized, normalized).lower()
-    process_names = {
-        "brave": "brave",
-        "brave browser": "brave",
-        "chrome": "chrome",
-        "google chrome": "chrome",
-        "edge": "msedge",
-        "microsoft edge": "msedge",
-        "word": "winword",
-        "microsoft word": "winword",
-        "excel": "excel",
-        "microsoft excel": "excel",
-        "powerpoint": "powerpnt",
-        "outlook": "outlook",
-        "notepad": "notepad",
-        "spotify": "spotify",
-        "code": "code",
-        "visual studio code": "code",
-        "calculator": "calc",
-        "file explorer": "explorer",
-        "task manager": "taskmgr",
-        "microsoft teams": "ms-teams",
-    }
-    process_name = process_names.get(normalized, re.sub(r"[^a-z0-9]", "", normalized))
-    encoded_process = base64.b64encode(process_name.encode("utf-8")).decode("ascii")
-    encoded_target = base64.b64encode(target.strip().encode("utf-8")).decode("ascii")
+    app_name = APP_ALIASES.get(normalized, target.strip())
+    command = COMMAND_ALIASES.get(normalized)
+    process_hint = os.path.splitext(os.path.basename(command[0]))[0] if command else app_name
+    encoded_app = base64.b64encode(app_name.encode("utf-8")).decode("ascii")
+    encoded_process = base64.b64encode(process_hint.encode("utf-8")).decode("ascii")
     script = rf"""
-$processName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_process}'))
-$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_target}'))
-$process = Get-Process -ErrorAction SilentlyContinue | Where-Object {{
-    $_.MainWindowHandle -ne 0 -and (
-        $_.ProcessName -ieq $processName -or
-        $_.MainWindowTitle -like "*$target*" -or
-        ($_.Path -and [IO.Path]::GetFileNameWithoutExtension($_.Path) -ieq $processName)
-    )
-}} | Select-Object -First 1
-$shell = New-Object -ComObject WScript.Shell
-if ($process) {{
-    $activated = $shell.AppActivate([int]$process.Id)
-}} else {{
-    # Packaged apps can expose a useful window title under a different process name.
-    $activated = $shell.AppActivate($target)
+$appName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_app}'))
+$processHint = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_process}'))
+$source = @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+
+public static class ViperDesktopWindowMatcher {{
+    private delegate bool EnumWindowsCallback(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+
+    private static string Normalize(string value) {{
+        return Regex.Replace((value ?? "").ToLowerInvariant(), "[^a-z0-9]", "");
+    }}
+
+    public static IntPtr FindWindow(string appName, string processHint) {{
+        string normalizedApp = Normalize(appName);
+        string normalizedProcess = Normalize(processHint);
+        IntPtr match = IntPtr.Zero;
+        int bestScore = 0;
+        var appTokens = Regex.Matches(appName ?? "", "[A-Za-z0-9]+");
+        string lastAppWord = appTokens.Count > 0 ? Normalize(appTokens[appTokens.Count - 1].Value) : normalizedApp;
+        EnumWindows((hWnd, lParam) => {{
+            if (!IsWindowVisible(hWnd)) return true;
+            var titleBuffer = new StringBuilder(1024);
+            GetWindowText(hWnd, titleBuffer, titleBuffer.Capacity);
+            string rawTitle = titleBuffer.ToString();
+            string title = Normalize(rawTitle);
+            uint processId;
+            GetWindowThreadProcessId(hWnd, out processId);
+            string processName = "";
+            try {{ processName = Normalize(Process.GetProcessById((int)processId).ProcessName); }} catch {{ }}
+
+            int score = 0;
+            if ((normalizedApp.Length > 0 && processName == normalizedApp) ||
+                (normalizedProcess.Length > 0 && processName == normalizedProcess)) {{
+                score = 4;
+            }} else if (lastAppWord.Length >= 4 && processName.Contains(lastAppWord)) {{
+                score = 3;
+            }} else if (normalizedApp.Length > 0 && title.Contains(normalizedApp)) {{
+                score = 2;
+            }} else if (lastAppWord.Length >= 4 &&
+                Regex.IsMatch(rawTitle, @"(?:^|[^A-Za-z0-9])" + Regex.Escape(lastAppWord) + @"(?:$|[^A-Za-z0-9])", RegexOptions.IgnoreCase)) {{
+                score = 1;
+            }}
+            if (score > bestScore) {{
+                bestScore = score;
+                match = hWnd;
+                if (score == 4) return false;
+            }}
+            return true;
+        }}, IntPtr.Zero);
+        return match;
+    }}
 }}
-if (-not $activated) {{ exit 2 }}
-Start-Sleep -Milliseconds 150
-$shell.SendKeys('%{{F4}}')
-exit 0
+'@
+try {{ Add-Type -TypeDefinition $source -ErrorAction Stop }} catch {{ exit 3 }}
+$window = [ViperDesktopWindowMatcher]::FindWindow($appName, $processHint)
+if ($window -eq [IntPtr]::Zero) {{ exit 2 }}
+# WM_CLOSE requests an ordinary, app-managed close (including unsaved-work prompts).
+if ([ViperDesktopWindowMatcher]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {{ exit 0 }}
+exit 4
 """
     return _run_hidden_powershell(script)

@@ -1,6 +1,60 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-type ViperStatus = "idle" | "armed" | "listening" | "thinking" | "speaking";
+export type ViperStatus = "idle" | "armed" | "listening" | "thinking" | "speaking" | "error";
+export type ViperTheme = "cyan" | "purple" | "amber" | "green";
+
+function generateWavePath(
+  width: number,
+  height: number,
+  volume: number,
+  state: ViperStatus,
+  layer: number
+): string {
+  const midY = height / 2;
+  const isL = state === "listening";
+  const isS = state === "speaking";
+  const isT = state === "thinking";
+
+  const amp = isL
+    ? Math.max(4, Math.min(14, (volume / 100) * 13 + 3))
+    : isS
+    ? 9
+    : isT
+    ? 5
+    : 2;
+
+  const points: [number, number][] = [];
+  const steps = 24;
+  const t = Date.now() * 0.006;
+  const phase = layer === 1 ? t : t * 1.4 + 1.2;
+  const freq = layer === 1 ? 0.07 : 0.09;
+
+  for (let i = 0; i <= steps; i++) {
+    const x = (i / steps) * width;
+    const env = Math.sin((i / steps) * Math.PI);
+    const y = midY + Math.sin(x * freq + phase) * amp * env;
+    points.push([x, y]);
+  }
+
+  return points.reduce((acc, [x, y], idx) => {
+    return idx === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : `${acc} L ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }, "");
+}
+
+interface QuickAction {
+  id: string;
+  label: string;
+  command: string;
+  icon: string;
+  category: "all" | "apps" | "system" | "web";
+}
+
+const DEFAULT_ACTIONS: QuickAction[] = [
+  { id: "sys", label: "System status", command: "check my system", icon: "⚡", category: "system" },
+  { id: "yt", label: "Open YouTube", command: "Open YouTube", icon: "▶", category: "web" },
+  { id: "chrome", label: "Open Chrome", command: "Open Google Chrome", icon: "🌐", category: "apps" },
+  { id: "time", label: "What time is it?", command: "What time is it?", icon: "⏱", category: "system" },
+];
 
 interface Telemetry {
   cpu_percent: number | null;
@@ -240,7 +294,46 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     },
   ]);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [theme, setTheme] = useState<ViperTheme>(() => {
+    return (localStorage.getItem("viper_theme") as ViperTheme) || "cyan";
+  });
+  const themeRef = useRef<ViperTheme>(theme);
+  themeRef.current = theme;
+
+  const [lastCommand, setLastCommand] = useState<string>("");
+
+  const [quickActions, setQuickActions] = useState<QuickAction[]>(() => {
+    try {
+      const saved = localStorage.getItem("viper_quick_actions");
+      return saved ? JSON.parse(saved) : DEFAULT_ACTIONS;
+    } catch {
+      return DEFAULT_ACTIONS;
+    }
+  });
+  const [selectedCategory, setSelectedCategory] = useState<"all" | "apps" | "system" | "web">("all");
+  const [isAddingAction, setIsAddingAction] = useState<boolean>(false);
+  const [newActionLabel, setNewActionLabel] = useState<string>("");
+  const [newActionCommand, setNewActionCommand] = useState<string>("");
+  const [newActionCategory, setNewActionCategory] = useState<"apps" | "system" | "web">("apps");
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [wakeSensitivity, setWakeSensitivity] = useState<number>(1.0);
+
+  // Expose setState('idle'|'listening'|'thinking'|'speaking'|'error') globally for debugging & triggers
+  useEffect(() => {
+    (window as any).setViperState = (state: ViperStatus) => {
+      setHudState(state);
+      if (state === "error") {
+        setTimeout(() => {
+          setHudState(isWakeWordActiveRef.current ? "armed" : "idle");
+        }, 1800);
+      }
+    };
+    return () => {
+      delete (window as any).setViperState;
+    };
+  }, []);
+
+  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const naturalAudioRef = useRef<HTMLAudioElement | null>(null);
   const naturalAudioUrlRef = useRef<string | null>(null);
   const ttsRequestRef = useRef<AbortController | null>(null);
@@ -551,6 +644,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
   const executeTextCommand = async (commandText: string) => {
     const trimmed = commandText.trim();
     if (!trimmed) return;
+    setLastCommand(trimmed);
 
     if (trimmed.toLowerCase() === "stop") {
       abortSpeechAndReset();
@@ -771,6 +865,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       pendingTranscriptRef.current = "";
       isConversationActiveRef.current = true;
       const userTurn = String(data.transcript || "").trim();
+      if (userTurn) setLastCommand(userTurn);
       const assistantTurn = String(data.audio_text || data.reply || "").trim();
       if (userTurn && assistantTurn) rememberConversationTurn(userTurn, assistantTurn);
       playAudioChime("confirm");
@@ -1198,130 +1293,462 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Arc-Reactor Holographic Canvas Animation
+  // Jarvis Holographic Center-Background Orb & Cyber Particle System
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = bgCanvasRef.current;
     if (!canvas) return;
-
-    canvas.width = 380;
-    canvas.height = 380;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let animationFrameId: number;
+    let animId: number;
     let angle = 0;
     let pulse = 0;
 
+    // Initialize floating cyber particles
+    const particleCount = 48;
+    const particles = Array.from({ length: particleCount }, () => ({
+      x: Math.random() * (canvas.clientWidth || 900),
+      y: Math.random() * (canvas.clientHeight || 650),
+      vx: (Math.random() - 0.5) * 0.32,
+      vy: (Math.random() - 0.5) * 0.32,
+      size: Math.random() * 2.0 + 0.8,
+      alpha: Math.random() * 0.45 + 0.15,
+      pulseSpeed: Math.random() * 0.03 + 0.015,
+      pulseOffset: Math.random() * Math.PI * 2,
+    }));
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = (rect.width || 900) * dpr;
+      canvas.height = (rect.height || 650) * dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+    };
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    // 3D Orbital Rings relative configuration
+    const orbitalRings = [
+      { rRel: 0.82, tiltX: 1.05, tiltY: 0.42, speed: 0.016, nodes: 3 },
+      { rRel: 0.92, tiltX: -0.80, tiltY: -0.65, speed: -0.013, nodes: 2 },
+      { rRel: 0.70, tiltX: 1.25, tiltY: 0.88, speed: 0.021, nodes: 3 },
+      { rRel: 1.00, tiltX: -0.40, tiltY: 1.15, speed: -0.018, nodes: 4 },
+      { rRel: 0.56, tiltX: 0.86, tiltY: -0.42, speed: 0.027, nodes: 2 },
+    ];
+
+    const projectPoint = (
+      x: number,
+      y: number,
+      z: number,
+      rotX: number,
+      rotY: number,
+      rotZ: number,
+      cx: number,
+      cy: number,
+      fov: number
+    ) => {
+      const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+      const y1 = y * cosX - z * sinX;
+      const z1 = y * sinX + z * cosX;
+
+      const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+      const x2 = x * cosY + z1 * sinY;
+      const z2 = -x * sinY + z1 * cosY;
+
+      const cosZ = Math.cos(rotZ), sinZ = Math.sin(rotZ);
+      const x3 = x2 * cosZ - y1 * sinZ;
+      const y3 = x2 * sinZ + y1 * cosZ;
+
+      const scale = fov / (fov + z2);
+      return {
+        x: cx + x3 * scale,
+        y: cy + y3 * scale,
+        z: z2,
+        scale,
+      };
+    };
+
     const render = () => {
-      const width = 380;
-      const height = 380;
+      const width = canvas.clientWidth || 900;
+      const height = canvas.clientHeight || 650;
       const centerX = width / 2;
       const centerY = height / 2;
 
       ctx.clearRect(0, 0, width, height);
 
       const currentState = hudStateRef.current;
-      const micLevel = audioLevelRef.current;
-      const dynamicBoost = micLevel * 80;
+      const micLevel = audioLevelRef.current || 0;
+      const dynamicBoost = micLevel * 85;
 
-      angle += currentState === "thinking" ? 0.05 : currentState === "listening" ? 0.03 + micLevel * 0.1 : 0.015;
+      const speedMult = currentState === "thinking"
+        ? 2.8
+        : currentState === "listening"
+        ? 1.5 + micLevel * 2.2
+        : currentState === "error"
+        ? 0.4
+        : 1.0;
+
+      angle += (currentState === "thinking" ? 0.048 : currentState === "listening" ? 0.025 + micLevel * 0.1 : 0.014) * speedMult;
       pulse += 0.04;
       const pulseScale = Math.sin(pulse) * 4 + dynamicBoost;
 
+      const curTheme = themeRef.current;
       let primaryColor = "rgba(0, 240, 255, ";
       let glowColor = "#00f0ff";
-      if (currentState === "thinking") {
-        primaryColor = "rgba(255, 185, 0, ";
-        glowColor = "#ffb900";
-      } else if (currentState === "speaking") {
-        primaryColor = "rgba(30, 144, 255, ";
-        glowColor = "#1e90ff";
-      } else if (currentState === "listening") {
+      let hotspotColor = "#ffffff";
+
+      if (curTheme === "purple") {
+        primaryColor = "rgba(192, 132, 252, ";
+        glowColor = "#c084fc";
+        hotspotColor = "#fdf4ff";
+      } else if (curTheme === "amber") {
+        primaryColor = "rgba(245, 158, 11, ";
+        glowColor = "#f59e0b";
+        hotspotColor = "#fffbeb";
+      } else if (curTheme === "green") {
         primaryColor = "rgba(0, 255, 170, ";
         glowColor = "#00ffaa";
+        hotspotColor = "#ecfdf5";
       }
+
+      // Dynamic State-based color overrides
+      if (currentState === "error") {
+        primaryColor = "rgba(239, 68, 68, ";
+        glowColor = "#ef4444";
+        hotspotColor = "#fff1f2";
+      } else if (currentState === "thinking") {
+        primaryColor = "rgba(255, 185, 0, ";
+        glowColor = "#ffb900";
+        hotspotColor = "#fff8e1";
+      } else if (currentState === "speaking") {
+        primaryColor = curTheme === "purple" ? "rgba(232, 121, 249, " : "rgba(56, 189, 248, ";
+        glowColor = curTheme === "purple" ? "#e879f9" : "#38bdf8";
+        hotspotColor = "#f0f9ff";
+      } else if (currentState === "listening") {
+        primaryColor = curTheme === "green" ? "rgba(52, 211, 153, " : "rgba(0, 255, 170, ";
+        glowColor = "#00ffaa";
+        hotspotColor = "#e6fff4";
+      }
+
+      // Faint cyber grid in background
+      ctx.save();
+      ctx.strokeStyle = primaryColor + "0.02)";
+      ctx.lineWidth = 0.8;
+      const gStep = 48;
+      for (let gx = 0; gx < width; gx += gStep) {
+        ctx.beginPath();
+        ctx.moveTo(gx, 0);
+        ctx.lineTo(gx, height);
+        ctx.stroke();
+      }
+      for (let gy = 0; gy < height; gy += gStep) {
+        ctx.beginPath();
+        ctx.moveTo(0, gy);
+        ctx.lineTo(width, gy);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 1. Ambient Dynamic Glow centered on Window Center
+      const ambientGrad = ctx.createRadialGradient(centerX, centerY, 20, centerX, centerY, Math.max(width * 0.65, 520));
+      ambientGrad.addColorStop(0, primaryColor + (currentState === "error" ? "0.38)" : "0.28)"));
+      ambientGrad.addColorStop(0.3, primaryColor + "0.12)");
+      ambientGrad.addColorStop(0.65, primaryColor + "0.03)");
+      ambientGrad.addColorStop(1, "rgba(2, 6, 14, 0)");
+      ctx.fillStyle = ambientGrad;
+      ctx.fillRect(0, 0, width, height);
+
+      // Clamped radius: prevents outer compass rings and brackets from touching/clipping window edges
+      const maxCompassR = Math.min(centerX - 24, centerY - 24, 250);
+      const baseR = Math.min(width * 0.26, height * 0.36, maxCompassR / 1.15, 220);
+      const fov = baseR * 2.5;
 
       ctx.save();
-      ctx.shadowBlur = 16 + dynamicBoost;
+      ctx.shadowBlur = 14 + dynamicBoost * 0.4;
       ctx.shadowColor = glowColor;
 
-      // Outer Segmented Ring
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 150, 0, Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.2)";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      // 2. Radial Starburst Photon Beams (Center Back)
+      const rayCount = 54;
+      for (let i = 0; i < rayCount; i++) {
+        const rayAngle = angle * 0.14 + (i * Math.PI * 2) / rayCount;
+        const isMajor = i % 6 === 0;
+        const isSemi = i % 3 === 0;
 
-      // Outer Rotating Arc Segments (Turns Bright Green when Listening!)
-      const segments = 12;
-      for (let i = 0; i < segments; i++) {
-        const segAngle = angle + (i * Math.PI * 2) / segments;
+        const rStart = baseR * 0.22 + Math.sin(pulse * 2.5 + i * 0.6) * 3;
+        const harmonic = Math.abs(Math.sin(i * 3.1 + pulse * 1.2)) * (baseR * 0.2);
+        const stateBoost = currentState === "listening"
+          ? dynamicBoost * 1.4
+          : currentState === "speaking"
+          ? Math.sin(pulse * 4 + i) * 16 + 18
+          : dynamicBoost * 0.4;
+
+        const rayLen = (isMajor ? baseR * 0.45 : isSemi ? baseR * 0.28 : baseR * 0.16) + harmonic + stateBoost;
+        const rEnd = rStart + rayLen;
+
+        const cosA = Math.cos(rayAngle);
+        const sinA = Math.sin(rayAngle);
+
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 140, segAngle, segAngle + 0.32);
-        ctx.strokeStyle = primaryColor + (i % 2 === 0 ? "0.95)" : "0.45)");
-        ctx.lineWidth = currentState === "listening" ? 4 : 3;
+        ctx.moveTo(centerX + cosA * rStart, centerY + sinA * rStart);
+        ctx.lineTo(centerX + cosA * rEnd, centerY + sinA * rEnd);
+        ctx.strokeStyle = primaryColor + (isMajor ? "0.9)" : isSemi ? "0.5)" : "0.22)");
+        ctx.lineWidth = isMajor ? 1.8 : isSemi ? 1.1 : 0.7;
         ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(centerX + cosA * rEnd, centerY + sinA * rEnd, isMajor ? 2.5 : 1.2, 0, Math.PI * 2);
+        ctx.fillStyle = isMajor ? hotspotColor : primaryColor + "0.85)";
+        ctx.fill();
       }
 
-      // Middle Ring with Tech Tick Marks
+      // 3. Technical Outer Compass & Tachymeter Gauge Rings
+      const outerR = baseR * 1.25;
       ctx.beginPath();
-      ctx.arc(centerX, centerY, 115, 0, Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.3)";
-      ctx.lineWidth = 1.5;
+      ctx.arc(centerX, centerY, outerR, 0, Math.PI * 2);
+      ctx.strokeStyle = primaryColor + "0.25)";
+      ctx.lineWidth = 1;
       ctx.stroke();
 
-      const numTicks = 36;
+      const numTicks = 72;
       for (let i = 0; i < numTicks; i++) {
-        const tickAngle = -angle * 0.75 + (i * Math.PI * 2) / numTicks;
-        const r1 = 110;
-        const r2 = i % 3 === 0 ? 124 + dynamicBoost * 0.35 : 116;
+        const tickAngle = -angle * 0.3 + (i * Math.PI * 2) / numTicks;
+        const isMajorTick = i % 6 === 0;
+        const tickLen = isMajorTick ? 14 : 6;
+        const t1 = outerR - tickLen;
+        const t2 = outerR;
         ctx.beginPath();
-        ctx.moveTo(centerX + Math.cos(tickAngle) * r1, centerY + Math.sin(tickAngle) * r1);
-        ctx.lineTo(centerX + Math.cos(tickAngle) * r2, centerY + Math.sin(tickAngle) * r2);
-        ctx.strokeStyle = primaryColor + (i % 3 === 0 ? "0.9)" : "0.3)");
-        ctx.lineWidth = 1.5;
+        ctx.moveTo(centerX + Math.cos(tickAngle) * t1, centerY + Math.sin(tickAngle) * t1);
+        ctx.lineTo(centerX + Math.cos(tickAngle) * t2, centerY + Math.sin(tickAngle) * t2);
+        ctx.strokeStyle = primaryColor + (isMajorTick ? "0.85)" : "0.26)");
+        ctx.lineWidth = isMajorTick ? 1.6 : 0.9;
         ctx.stroke();
       }
 
-      // Inner Counter-Rotating Bracket Ring
-      for (let i = 0; i < 4; i++) {
-        const bracketAngle = -angle * 1.2 + (i * Math.PI) / 2;
+      // Segmented Rotating Bracket Ring
+      const bracketR = baseR * 1.14;
+      const bracketSegments = 12;
+      for (let i = 0; i < bracketSegments; i++) {
+        const bAngle = angle * 0.5 + (i * Math.PI * 2) / bracketSegments;
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 85, bracketAngle, bracketAngle + Math.PI / 4);
-        ctx.strokeStyle = primaryColor + "0.85)";
-        ctx.lineWidth = 4;
+        ctx.arc(centerX, centerY, bracketR, bAngle, bAngle + 0.35);
+        ctx.strokeStyle = primaryColor + (i % 2 === 0 ? "0.92)" : "0.45)");
+        ctx.lineWidth = currentState === "listening" ? 3.5 : 2.5;
+        ctx.stroke();
+
+        const dotAngle = bAngle + 0.35;
+        ctx.beginPath();
+        ctx.arc(centerX + Math.cos(dotAngle) * bracketR, centerY + Math.sin(dotAngle) * bracketR, 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = primaryColor + "0.95)";
+        ctx.fill();
+      }
+
+      // Cardinal HUD reticle marks
+      for (const a of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]) {
+        const retAngle = a + angle * 0.1;
+        const r1 = baseR * 1.05;
+        const r2 = baseR * 1.12;
+        ctx.beginPath();
+        ctx.moveTo(centerX + Math.cos(retAngle) * r1, centerY + Math.sin(retAngle) * r1);
+        ctx.lineTo(centerX + Math.cos(retAngle) * r2, centerY + Math.sin(retAngle) * r2);
+        ctx.strokeStyle = hotspotColor;
+        ctx.lineWidth = 2;
         ctx.stroke();
       }
 
-      // Core Glowing Arc Reactor Center (Vibrant pulsing glow)
-      const coreRadius = Math.max(
-        32,
-        44 + pulseScale + (currentState === "speaking" ? Math.sin(pulse * 3) * 8 : 0)
-      );
-      const gradient = ctx.createRadialGradient(centerX, centerY, 5, centerX, centerY, coreRadius);
-      gradient.addColorStop(0, primaryColor + "1)");
-      gradient.addColorStop(0.45, primaryColor + "0.65)");
-      gradient.addColorStop(1, primaryColor + "0)");
+      // 4. 3D Gyroscopic Orbital Rings with Orbiting Satellites
+      orbitalRings.forEach((ring) => {
+        const currentR = baseR * ring.rRel;
+        const ringRot = angle * (ring.speed / 0.015);
+        const segCount = 60;
+        const projected: { x: number; y: number; z: number; scale: number }[] = [];
+
+        for (let m = 0; m < segCount; m++) {
+          const theta = (m * Math.PI * 2) / segCount;
+          const x0 = currentR * Math.cos(theta);
+          const y0 = currentR * Math.sin(theta);
+          projected.push(projectPoint(x0, y0, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov));
+        }
+
+        for (let m = 0; m < segCount; m++) {
+          const p1 = projected[m];
+          const p2 = projected[(m + 1) % segCount];
+          const avgZ = (p1.z + p2.z) / 2;
+          const avgScale = (p1.scale + p2.scale) / 2;
+
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+
+          if (avgZ < 0) {
+            ctx.strokeStyle = primaryColor + Math.min(0.95, 0.72 + 0.28 * (avgScale - 0.7)) + ")";
+            ctx.lineWidth = Math.max(1.2, 1.9 * avgScale);
+          } else {
+            ctx.strokeStyle = primaryColor + Math.max(0.18, 0.25 * avgScale) + ")";
+            ctx.lineWidth = Math.max(0.7, 1.0 * avgScale);
+          }
+          ctx.stroke();
+        }
+
+        // Orbiting photon nodes
+        for (let j = 0; j < ring.nodes; j++) {
+          const nodeAngle = ringRot * 2.2 + (j * Math.PI * 2) / ring.nodes;
+
+          for (let t = 3; t >= 1; t--) {
+            const sparkAngle = nodeAngle - t * 0.06;
+            const sx = currentR * Math.cos(sparkAngle);
+            const sy = currentR * Math.sin(sparkAngle);
+            const sparkPt = projectPoint(sx, sy, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov);
+
+            ctx.beginPath();
+            ctx.arc(sparkPt.x, sparkPt.y, Math.max(0.8, (2.2 - t * 0.5) * sparkPt.scale), 0, Math.PI * 2);
+            ctx.fillStyle = primaryColor + (0.45 / t) + ")";
+            ctx.fill();
+          }
+
+          const nx = currentR * Math.cos(nodeAngle);
+          const ny = currentR * Math.sin(nodeAngle);
+          const nodePt = projectPoint(nx, ny, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov);
+
+          ctx.beginPath();
+          ctx.arc(nodePt.x, nodePt.y, 6.5 * nodePt.scale, 0, Math.PI * 2);
+          ctx.fillStyle = primaryColor + "0.35)";
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(nodePt.x, nodePt.y, 2.8 * nodePt.scale, 0, Math.PI * 2);
+          ctx.fillStyle = hotspotColor;
+          ctx.fill();
+        }
+      });
+
+      // 5. Inner Tech Reference Rings
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, baseR * 0.38, 0, Math.PI * 2);
+      ctx.strokeStyle = primaryColor + "0.35)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
 
       ctx.beginPath();
-      ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
+      ctx.setLineDash([4, 6]);
+      ctx.arc(centerX, centerY, baseR * 0.30, -angle * 0.8, -angle * 0.8 + Math.PI * 2);
+      ctx.strokeStyle = primaryColor + "0.5)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 5b. Live Circular Audio Waveform Ring
+      const wavePoints = 56;
+      ctx.beginPath();
+      for (let w = 0; w <= wavePoints; w++) {
+        const theta = (w * Math.PI * 2) / wavePoints;
+        const waveAmp = (currentState === "listening" ? dynamicBoost * 0.45 : currentState === "speaking" ? 7 : 2) *
+          Math.sin(theta * 7 + pulse * 4);
+        const wr = baseR * 0.44 + waveAmp;
+        const wx = centerX + Math.cos(theta) * wr;
+        const wy = centerY + Math.sin(theta) * wr;
+        if (w === 0) ctx.moveTo(wx, wy);
+        else ctx.lineTo(wx, wy);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = primaryColor + (currentState === "listening" ? "0.95)" : "0.55)");
+      ctx.lineWidth = currentState === "listening" ? 2.5 : 1.4;
+      ctx.stroke();
+
+      // 6. Central Singularity & Pulsing Energy Core
+      const baseCoreRadius = (currentState === "thinking"
+        ? baseR * 0.22
+        : currentState === "listening"
+        ? baseR * 0.25 + dynamicBoost * 0.4
+        : baseR * 0.20);
+      const coreRadius = Math.max(28, baseCoreRadius + pulseScale);
+
+      const coreGrad = ctx.createRadialGradient(centerX, centerY, 4, centerX, centerY, coreRadius * 2.2);
+      coreGrad.addColorStop(0, hotspotColor);
+      coreGrad.addColorStop(0.2, primaryColor + "1.0)");
+      coreGrad.addColorStop(0.5, primaryColor + "0.65)");
+      coreGrad.addColorStop(0.8, primaryColor + "0.22)");
+      coreGrad.addColorStop(1, primaryColor + "0)");
+
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, coreRadius * 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = coreGrad;
       ctx.fill();
 
-      // Center Core Dot
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, coreRadius * 0.75, 0, Math.PI * 2);
+      ctx.strokeStyle = primaryColor + "0.95)";
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
+
       ctx.beginPath();
       ctx.arc(centerX, centerY, 15, 0, Math.PI * 2);
-      ctx.fillStyle = primaryColor + "1)";
+      ctx.fillStyle = hotspotColor;
       ctx.fill();
+
+      // Speaking sonic shockwaves
+      if (currentState === "speaking") {
+        for (let w = 0; w < 3; w++) {
+          const waveR = ((pulse * 45 + w * 40) % (baseR * 0.8)) + 18;
+          const waveAlpha = Math.max(0, 1 - waveR / (baseR * 0.85)) * 0.7;
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle = primaryColor + waveAlpha + ")";
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
+        }
+      }
 
       ctx.restore();
 
-      animationFrameId = requestAnimationFrame(render);
+      // 7. Floating Cyber Particle Field Across the Whole Window
+      ctx.save();
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0) p.x = width;
+        if (p.x > width) p.x = 0;
+        if (p.y < 0) p.y = height;
+        if (p.y > height) p.y = 0;
+
+        const currentAlpha = p.alpha * (0.7 + 0.3 * Math.sin(pulse * 2 * p.pulseSpeed + p.pulseOffset));
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = primaryColor + currentAlpha + ")";
+        ctx.fill();
+
+        for (let j = i + 1; j < particles.length; j++) {
+          const p2 = particles[j];
+          const dx = p.x - p2.x;
+          const dy = p.y - p2.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < 7200) {
+            const dist = Math.sqrt(distSq);
+            const lineAlpha = (1 - dist / 85) * 0.08;
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = primaryColor + lineAlpha + ")";
+            ctx.lineWidth = 0.7;
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+
+      animId = requestAnimationFrame(render);
     };
 
     render();
-    return () => cancelAnimationFrame(animationFrameId);
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener("resize", resize);
+    };
   }, []);
 
   const handleFormSubmit = (e: FormEvent) => {
@@ -1332,34 +1759,17 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
   };
 
   return (
-    <div className="viper-hud-container">
-      {/* Top Telemetry Header */}
+    <div className="viper-hud-container" data-theme={theme}>
+      {/* Background Holographic HUD & Particle Canvas */}
+      <canvas ref={bgCanvasRef} className="viper-hud-bg-canvas" aria-hidden="true" />
+
+      {/* Top Controls Header */}
       <div className="viper-top-bar">
         <div className="viper-brand">
           <span className="viper-status-led" data-state={hudState}></span>
           <div>
             <div className="viper-title">V.I.P.E.R.</div>
             <div className="viper-subtitle">VIRTUAL INTELLIGENT PERSONAL ELECTRONIC RESPONDENT</div>
-          </div>
-        </div>
-
-        <div className="viper-telemetry-strip">
-          <div className="telemetry-pill">
-            <span className="pill-label">CPU</span>
-            <span className="pill-val">{telemetry?.cpu_percent ? `${telemetry.cpu_percent}%` : "NOMINAL"}</span>
-          </div>
-          <div className="telemetry-pill">
-            <span className="pill-label">RAM</span>
-            <span className="pill-val">
-              {telemetry?.memory_used_gb ? `${telemetry.memory_used_gb} / ${telemetry.memory_total_gb} GB` : "ACTIVE"}
-            </span>
-          </div>
-          <div className="telemetry-pill">
-            <span className="pill-label">POWER</span>
-            <span className="pill-val">{telemetry?.battery_percent ? `${telemetry.battery_percent}%` : "100% AC"}</span>
-          </div>
-          <div className="telemetry-pill clock-pill">
-            <span className="pill-val">{clock || "SYNCING..."}</span>
           </div>
         </div>
 
@@ -1374,25 +1784,22 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
                 const selected = audioDevices.find((device) => device.deviceId === e.target.value);
                 setMicStatusMsg(`Switching microphone to ${selected?.label || "selected input"}...`);
               }}
-              title="Select Microphone Input Device"
+              title={activeMicLabel ? `Microphone: ${activeMicLabel}` : "Select Microphone Input Device"}
             >
               <option value="" disabled>Choose microphone</option>
               {audioDevices.map((d, i) => (
-                <option key={d.deviceId || i} value={d.deviceId}>
+                <option key={d.deviceId || i} value={d.deviceId} title={d.label || `Microphone ${i + 1}`}>
                   🎙️ {d.label || `Microphone ${i + 1}`}
                 </option>
               ))}
             </select>
           )}
-          <span className="active-mic-label" title={`Active input: ${activeMicLabel || "Detecting microphone"}`}>
-            MIC: {activeMicLabel || "DETECTING..."}
-          </span>
 
           <select
             className="speech-voice-select"
             value={selectedVoiceURI}
             onChange={(event) => setSelectedVoiceURI(event.target.value)}
-            title="Choose V.I.P.E.R.'s speaking voice"
+            title={`Speaking voice: ${selectedVoiceURI}`}
           >
             <optgroup label="Natural AI voices">
               <option value="ai:troy">AI Natural — Troy</option>
@@ -1407,7 +1814,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
                 {[...speechVoices]
                   .sort((a, b) => scoreSpeechVoice(b) - scoreSpeechVoice(a))
                   .map((voice) => (
-                    <option key={voice.voiceURI} value={`native:${voice.voiceURI}`}>
+                    <option key={voice.voiceURI} value={`native:${voice.voiceURI}`} title={`${voice.name} (${voice.lang})`}>
                       {voice.name} ({voice.lang})
                     </option>
                   ))}
@@ -1415,13 +1822,32 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             )}
           </select>
 
+          {/* Theme Switcher Pills */}
+          <div className="theme-selector-pills" title="Select holographic accent color theme">
+            {(["cyan", "purple", "amber", "green"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`theme-pill-btn theme-${t} ${theme === t ? "active" : ""}`}
+                onClick={() => {
+                  setTheme(t);
+                  localStorage.setItem("viper_theme", t);
+                }}
+                title={`Switch to ${t.toUpperCase()} theme`}
+              >
+                <span className="theme-dot" />
+                {t.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
           <button
             type="button"
             className={`hud-toggle-btn ${isWakeWordActive ? "active" : ""}`}
             onClick={toggleWakeWordMode}
             title="Toggle Continuous Hands-Free Wake Word ('Hey Viper')"
           >
-            {isWakeWordActive ? "🟢 WAKE WORD: ON" : "⚪ WAKE WORD: OFF"}
+            {isWakeWordActive ? "🟢 WAKE: ON" : "⚪ WAKE: OFF"}
           </button>
 
           {hudState === "speaking" && (
@@ -1443,6 +1869,46 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
           >
             {isVoiceMuted ? "🔇 VOICE: MUTED" : "🔊 VOICE: ON"}
           </button>
+
+          <button
+            type="button"
+            className={`hud-toggle-btn ${isSettingsOpen ? "active" : ""}`}
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            title="Open V.I.P.E.R. settings & state tester"
+          >
+            ⚙️ SETTINGS
+          </button>
+        </div>
+      </div>
+
+      {/* Permanent Live System Telemetry Strip (Claude Idea 4) */}
+      <div className="viper-hud-telemetry-strip">
+        <div className="telemetry-hud-item">
+          <span className="telemetry-hud-label">CPU</span>
+          <div className="telemetry-gauge-bar">
+            <div className="telemetry-gauge-fill" style={{ width: `${Math.min(100, telemetry?.cpu_percent || 18)}%` }} />
+          </div>
+          <span className="telemetry-hud-val">{telemetry?.cpu_percent ? `${telemetry.cpu_percent}%` : "18%"}</span>
+        </div>
+        <div className="telemetry-hud-item">
+          <span className="telemetry-hud-label">RAM</span>
+          <div className="telemetry-gauge-bar">
+            <div className="telemetry-gauge-fill" style={{ width: `${Math.min(100, telemetry?.memory_percent || 42)}%` }} />
+          </div>
+          <span className="telemetry-hud-val">
+            {telemetry?.memory_used_gb ? `${telemetry.memory_used_gb}G` : "4.2G"}
+          </span>
+        </div>
+        <div className="telemetry-hud-item">
+          <span className="telemetry-hud-label">POWER</span>
+          <span className="telemetry-hud-val">{telemetry?.battery_percent ? `${telemetry.battery_percent}%` : "100% AC"}</span>
+        </div>
+        <div className="telemetry-hud-item">
+          <span className="telemetry-hud-label">NET</span>
+          <span className="telemetry-hud-val status-online">● ONLINE</span>
+        </div>
+        <div className="telemetry-hud-item clock-hud-item">
+          <span className="telemetry-hud-val">{clock || new Date().toLocaleTimeString()}</span>
         </div>
       </div>
 
@@ -1450,30 +1916,65 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       <div className="viper-main-viewport">
         {/* Left Column: Arc Reactor Core & Voice Controls */}
         <div className="viper-core-section">
+          {/* Enhanced Status & Trigger Panel */}
           <div
-            className="arc-reactor-wrapper"
+            className={`hud-core-trigger-card ${hudState === "listening" ? "is-scanning" : ""}`}
+            data-state={hudState}
             onClick={toggleVoiceInput}
             title={hudState === "speaking" ? "Click to Stop Talking" : "Click to Talk / Spacebar"}
           >
-            <canvas ref={canvasRef} className="arc-reactor-canvas" />
-            <div className="arc-reactor-overlay">
-              <span className="core-state-badge" data-state={hudState}>
-                {hudState.toUpperCase()}
+            {hudState === "listening" && <div className="scanning-laser-line" />}
+
+            <div className="hud-card-top-row">
+              <span className="hud-connection-pill">
+                <span className="connection-dot" /> ONLINE
               </span>
-              <span className="core-hint">
-                {hudState === "armed"
-                  ? "ARMED... SAY 'HEY VIPER' TO ACTIVATE"
-                  : hudState === "listening"
-                  ? "V.I.P.E.R. ACTIVATED — SAY YOUR COMMAND"
-                  : hudState === "thinking"
-                  ? "COMPUTING WITH GROQ..."
-                  : hudState === "speaking"
-                  ? "SPEAKING... (CLICK TO STOP)"
-                  : isWakeWordActive
-                  ? "SAY 'HEY VIPER' (OR CLICK TO TALK)"
-                  : "CLICK TO TALK (OR PRESS SPACE)"}
+              <div className="hud-mic-level-pill" title={`Microphone volume: ${Math.round(liveVolume || 0)}%`}>
+                <span className="mic-bars-container" aria-hidden="true">
+                  {[0.4, 0.7, 1.0, 0.8, 0.5].map((factor, i) => (
+                    <span
+                      key={i}
+                      className="mic-eq-bar"
+                      style={{
+                        height: `${Math.max(3, Math.min(14, (liveVolume || 4) * factor * 0.22 + 3))}px`,
+                      }}
+                    />
+                  ))}
+                </span>
+                <span className="mic-pct-val">{Math.min(100, Math.round(liveVolume || 0))}%</span>
+              </div>
+            </div>
+
+            <div className="hud-core-status-badge-wrap">
+              <span className="core-state-badge" data-state={hudState}>
+                <span className="core-state-led" data-state={hudState} />
+                {hudState === "armed" || hudState === "idle" ? "STANDBY" : hudState.toUpperCase()}
               </span>
             </div>
+
+            <span className="core-hint">
+              {hudState === "armed" || hudState === "idle"
+                ? "Say 'Hey Viper' to activate"
+                : hudState === "listening"
+                ? "Listening..."
+                : hudState === "thinking"
+                ? "Processing..."
+                : hudState === "speaking"
+                ? "Speaking..."
+                : hudState === "error"
+                ? "Error..."
+                : isWakeWordActive
+                ? "Say 'Hey Viper' to activate"
+                : "Click anywhere to talk"}
+            </span>
+
+            {lastCommand && (
+              <div className="last-command-tag" title={`Last directive: ${lastCommand}`}>
+                <span className="last-cmd-label">LAST:</span> "{lastCommand}"
+              </div>
+            )}
+
+            <div className="hud-click-hint">Click anywhere to Talk • Spacebar</div>
           </div>
 
           {/* Status & Live Voice Transcript Bar */}
@@ -1487,21 +1988,107 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
             )}
           </div>
 
-          {/* Quick Actions Chips */}
-      <div className="viper-quick-chips">
-            <span className="chips-title">QUICK ACTIONS</span>
+          {/* Categorized & Customizable Quick Actions */}
+          <div className="viper-quick-chips">
+            <div className="chips-header-row">
+              <span className="chips-title">QUICK ACTIONS</span>
+              <div className="chips-category-filter">
+                {(["all", "apps", "system", "web"] as const).map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    className={`cat-btn ${selectedCategory === cat ? "active" : ""}`}
+                    onClick={() => setSelectedCategory(cat)}
+                  >
+                    {cat.toUpperCase()}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="add-action-btn"
+                  onClick={() => setIsAddingAction(!isAddingAction)}
+                  title="Add custom quick action button"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {isAddingAction && (
+              <div className="add-action-form">
+                <input
+                  type="text"
+                  placeholder="Label (e.g. Spotify)..."
+                  value={newActionLabel}
+                  onChange={(e) => setNewActionLabel(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Directive (e.g. Open Spotify)..."
+                  value={newActionCommand}
+                  onChange={(e) => setNewActionCommand(e.target.value)}
+                />
+                <div className="add-action-row">
+                  <select
+                    value={newActionCategory}
+                    onChange={(e) => setNewActionCategory(e.target.value as any)}
+                  >
+                    <option value="apps">Apps</option>
+                    <option value="system">System</option>
+                    <option value="web">Web</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="save-action-btn"
+                    onClick={() => {
+                      if (newActionLabel.trim() && newActionCommand.trim()) {
+                        const updated: QuickAction[] = [
+                          ...quickActions,
+                          {
+                            id: String(Date.now()),
+                            label: newActionLabel.trim(),
+                            command: newActionCommand.trim(),
+                            icon: "⚡",
+                            category: newActionCategory,
+                          },
+                        ];
+                        setQuickActions(updated);
+                        localStorage.setItem("viper_quick_actions", JSON.stringify(updated));
+                        setNewActionLabel("");
+                        setNewActionCommand("");
+                        setIsAddingAction(false);
+                      }
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="chips-row">
-              <button type="button" onClick={() => executeTextCommand("check my system")}>
-                System status
-              </button>
-              <button type="button" onClick={() => executeTextCommand("Open YouTube")}>
-                Open YouTube
-              </button>
-              <button type="button" onClick={() => executeTextCommand("Open Google Chrome")}>
-                Open Chrome
-              </button>
-              <button type="button" onClick={() => executeTextCommand("What time is it?")}>
-                What time is it?
+              {quickActions
+                .filter((a) => selectedCategory === "all" || a.category === selectedCategory)
+                .map((action) => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className="chip-action-btn"
+                    onClick={() => executeTextCommand(action.command)}
+                    title={`Run: ${action.command}`}
+                  >
+                    <span className="chip-icon">{action.icon}</span>
+                    <span className="chip-label">{action.label}</span>
+                  </button>
+                ))}
+              <button
+                type="button"
+                className="chip-action-btn chip-add-card"
+                onClick={() => setIsAddingAction(true)}
+                title="Add custom action card"
+              >
+                <span className="chip-icon">+</span>
+                <span className="chip-label">Custom Action</span>
               </button>
             </div>
           </div>
@@ -1509,9 +2096,15 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
 
         {/* Right Column: Cyber Action Terminal & Directive Feed */}
         <div className="viper-terminal-section">
+          {/* HUD Corner Brackets */}
+          <span className="hud-corner hud-corner-tl" aria-hidden="true" />
+          <span className="hud-corner hud-corner-tr" aria-hidden="true" />
+          <span className="hud-corner hud-corner-bl" aria-hidden="true" />
+          <span className="hud-corner hud-corner-br" aria-hidden="true" />
+
           <div className="terminal-header">
             <div className="terminal-title">
-              <span className="terminal-dot"></span> CONVERSATION
+              <span className="terminal-dot"></span> CONVERSATION FEED
             </div>
             <div className="terminal-actions">
               <button
@@ -1536,24 +2129,97 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
           <div className="terminal-body">
             {logs.filter((log) => log.id !== "init").map((log) => (
               <div key={log.id} className={`terminal-entry entry-${log.type}`}>
-                <div className="entry-meta">
-                  <span className="entry-time">{log.timestamp}</span>
-                  <span className="entry-sender">[{log.type === "user" ? "DEVANSH" : "V.I.P.E.R."}]</span>
-                  {log.actionTag && <span className="entry-badge">{log.actionTag}</span>}
+                {log.type === "viper" && (
+                  <span className="entry-viper-avatar" aria-hidden="true">V</span>
+                )}
+                <div className="entry-bubble">
+                  <div className="entry-meta">
+                    <span className="entry-sender">[{log.type === "user" ? "DEVANSH" : "V.I.P.E.R."}]</span>
+                    <span className="entry-time">{log.timestamp}</span>
+                    {log.actionTag && <span className="entry-badge">{log.actionTag}</span>}
+                  </div>
+                  <div className="entry-content">{log.text}</div>
                 </div>
-                <div className="entry-content">{log.text}</div>
               </div>
             ))}
-            {logs.every((log) => log.id === "init") && (
+
+            {/* Live Typing / Computing Animation */}
+            {hudState === "thinking" && (
+              <div className="terminal-entry entry-viper entry-computing">
+                <span className="entry-viper-avatar" aria-hidden="true">V</span>
+                <div className="entry-bubble">
+                  <div className="entry-meta">
+                    <span className="entry-sender">[V.I.P.E.R.]</span>
+                    <span className="entry-time">{new Date().toLocaleTimeString()}</span>
+                    <span className="entry-badge">COMPUTING</span>
+                  </div>
+                  <div className="entry-content computing-indicator">
+                    <span className="computing-dot" />
+                    <span className="computing-dot" />
+                    <span className="computing-dot" />
+                    <span className="computing-text">Synthesizing response with Groq LPU...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {logs.filter((log) => log.id !== "init").length === 0 && (
               <div className="conversation-empty-state">
                 <span className="conversation-empty-logo" aria-hidden="true">V</span>
-                <strong>How can I help?</strong>
-                <span>Ask a question, give a voice command, or type below.</span>
+                <strong className="empty-state-title">How can I help, Sir?</strong>
+                <span className="empty-state-subtitle">Ask a question, give a voice command, or type below.</span>
               </div>
             )}
           </div>
 
-          {/* Manual Input Command Bar */}
+          {/* Real Animated Waveform Bar Above Input */}
+          <div className="terminal-audio-wave-bar">
+            <div className="wave-status-left">
+              <span className="live-wave-label">
+                {hudState === "listening"
+                  ? "🎙️ LIVE MIC STREAM"
+                  : hudState === "speaking"
+                  ? "🔊 VOICE SYNTHESIS"
+                  : hudState === "thinking"
+                  ? "⚡ NEURAL PROCESSING"
+                  : "⚡ AUDIO READY"}
+              </span>
+            </div>
+            {/* Real Fluid SVG Waveform */}
+            <div className="live-fluid-waveform-wrapper">
+              <svg className="live-fluid-wave-svg" viewBox="0 0 280 32" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="var(--theme-accent, #00f0ff)" stopOpacity="0.2" />
+                    <stop offset="50%" stopColor="var(--theme-accent, #00f0ff)" stopOpacity="0.95" />
+                    <stop offset="100%" stopColor="#00ffaa" stopOpacity="0.3" />
+                  </linearGradient>
+                  <linearGradient id="waveGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#ffffff" stopOpacity="0.1" />
+                    <stop offset="50%" stopColor="#ffffff" stopOpacity="0.8" />
+                    <stop offset="100%" stopColor="var(--theme-accent, #00f0ff)" stopOpacity="0.2" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d={generateWavePath(280, 32, liveVolume, hudState, 1)}
+                  fill="none"
+                  stroke="url(#waveGrad)"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                />
+                <path
+                  d={generateWavePath(280, 32, liveVolume, hudState, 2)}
+                  fill="none"
+                  stroke="url(#waveGlow)"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <span className="live-wave-val">{Math.round(liveVolume || 0)}%</span>
+          </div>
+
+          {/* Manual Input Command Bar with Voice Mic Button */}
           <form className="terminal-input-bar" onSubmit={handleFormSubmit}>
             <span className="input-prompt">&gt;</span>
             <input
@@ -1562,12 +2228,127 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
               value={commandInput}
               onChange={(e) => setCommandInput(e.target.value)}
             />
+            <button
+              type="button"
+              className={`terminal-mic-btn ${hudState === "listening" ? "listening" : ""}`}
+              onClick={toggleVoiceInput}
+              title={hudState === "listening" ? "Listening... click to stop" : "Click to speak voice directive"}
+            >
+              🎙️
+            </button>
             <button type="submit" className="terminal-send-btn">
               Send
             </button>
           </form>
         </div>
       </div>
+
+      {/* Settings Modal Panel */}
+      {isSettingsOpen && (
+        <div className="viper-settings-modal-backdrop" onClick={() => setIsSettingsOpen(false)}>
+          <div className="viper-settings-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-modal-header">
+              <span className="settings-modal-title">⚙️ V.I.P.E.R. SYSTEM SETTINGS</span>
+              <button
+                type="button"
+                className="settings-modal-close"
+                onClick={() => setIsSettingsOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="settings-modal-body">
+              {/* Voice section */}
+              <div className="settings-row">
+                <label className="settings-label">SYNTHESIS VOICE</label>
+                <select
+                  className="settings-select"
+                  value={selectedVoiceURI}
+                  onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                >
+                  <optgroup label="Natural AI voices">
+                    <option value="ai:troy">AI Natural — Troy</option>
+                    <option value="ai:daniel">AI Natural — Daniel</option>
+                    <option value="ai:austin">AI Natural — Austin</option>
+                    <option value="ai:autumn">AI Natural — Autumn</option>
+                    <option value="ai:diana">AI Natural — Diana</option>
+                    <option value="ai:hannah">AI Natural — Hannah</option>
+                  </optgroup>
+                  {speechVoices.length > 0 && (
+                    <optgroup label="System voices">
+                      {[...speechVoices]
+                        .sort((a, b) => scoreSpeechVoice(b) - scoreSpeechVoice(a))
+                        .map((voice) => (
+                          <option key={voice.voiceURI} value={`native:${voice.voiceURI}`}>
+                            {voice.name} ({voice.lang})
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+
+              {/* Theme section */}
+              <div className="settings-row">
+                <label className="settings-label">HOLOGRAPHIC ACCENT THEME</label>
+                <div className="settings-theme-grid">
+                  {(["cyan", "purple", "amber", "green"] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`settings-theme-btn theme-${t} ${theme === t ? "active" : ""}`}
+                      onClick={() => {
+                        setTheme(t);
+                        localStorage.setItem("viper_theme", t);
+                      }}
+                    >
+                      <span className="theme-dot" />
+                      {t.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Wake Word Sensitivity */}
+              <div className="settings-row">
+                <div className="settings-row-between">
+                  <label className="settings-label">WAKE WORD SENSITIVITY</label>
+                  <span className="settings-val-badge">{wakeSensitivity}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.1"
+                  className="settings-slider"
+                  value={wakeSensitivity}
+                  onChange={(e) => setWakeSensitivity(parseFloat(e.target.value))}
+                />
+              </div>
+
+              {/* State Tester Row */}
+              <div className="settings-row">
+                <label className="settings-label">TEST ORB REACTIVE STATES</label>
+                <div className="settings-states-row">
+                  {(["idle", "listening", "thinking", "speaking", "error"] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      className={`state-test-btn state-${st} ${hudState === st ? "active" : ""}`}
+                      onClick={() => {
+                        (window as any).setViperState?.(st);
+                      }}
+                    >
+                      {st.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,9 +12,9 @@ declare global {
 function App() {
   const [isOpen, setIsOpen] = useState(false);
 
-  const setExpanded = async (expanded: boolean) => {
-    await window.viperDesktop?.setExpanded(expanded);
+  const setExpanded = (expanded: boolean) => {
     setIsOpen(expanded);
+    void window.viperDesktop?.setExpanded(expanded);
   };
 
   return (

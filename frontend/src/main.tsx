@@ -4,6 +4,7 @@ import App from "./App";
 import "./styles.css";
 
 if (window.viperDesktop) {
+  document.documentElement.classList.add("viper-desktop-mode");
   document.body.classList.add("viper-desktop-mode");
 }
 
