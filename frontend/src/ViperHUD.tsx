@@ -270,8 +270,17 @@ function playAudioChime(type: "activate" | "confirm" | "alert") {
   } catch {}
 }
 
-export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string) => void } = {}) {
+interface ViperHUDProps {
+  onNavigateModule?: (mod: string) => void;
+  onStateChange?: (state: ViperStatus) => void;
+}
+
+export function ViperHUD({ onNavigateModule, onStateChange }: ViperHUDProps = {}) {
   const [hudState, setHudState] = useState<ViperStatus>("armed");
+
+  useEffect(() => {
+    onStateChange?.(hudState);
+  }, [hudState, onStateChange]);
   const [isVoiceMuted, setIsVoiceMuted] = useState<boolean>(false);
   const [isWakeWordActive, setIsWakeWordActive] = useState<boolean>(true);
   const [micStatusMsg, setMicStatusMsg] = useState<string>("Standby active. Say 'Hey Viper' anytime.");
@@ -333,7 +342,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     };
   }, []);
 
-  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chatOrbCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const naturalAudioRef = useRef<HTMLAudioElement | null>(null);
   const naturalAudioUrlRef = useRef<string | null>(null);
   const ttsRequestRef = useRef<AbortController | null>(null);
@@ -1293,9 +1302,10 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Jarvis Holographic Center-Background Orb & Cyber Particle System
+  // Glowing Arc Reactor Orb Canvas (Claude Idea 1 & 2)
+  // Dynamic scaling: ~180px in empty state -> ~48px in header when messages arrive
   useEffect(() => {
-    const canvas = bgCanvasRef.current;
+    const canvas = chatOrbCanvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
@@ -1304,31 +1314,6 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     let animId: number;
     let angle = 0;
     let pulse = 0;
-
-    // Initialize floating cyber particles
-    const particleCount = 48;
-    const particles = Array.from({ length: particleCount }, () => ({
-      x: Math.random() * (canvas.clientWidth || 900),
-      y: Math.random() * (canvas.clientHeight || 650),
-      vx: (Math.random() - 0.5) * 0.32,
-      vy: (Math.random() - 0.5) * 0.32,
-      size: Math.random() * 2.0 + 0.8,
-      alpha: Math.random() * 0.45 + 0.15,
-      pulseSpeed: Math.random() * 0.03 + 0.015,
-      pulseOffset: Math.random() * Math.PI * 2,
-    }));
-
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = (rect.width || 900) * dpr;
-      canvas.height = (rect.height || 650) * dpr;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(dpr, dpr);
-    };
-
-    resize();
-    window.addEventListener("resize", resize);
 
     // 3D Orbital Rings relative configuration
     const orbitalRings = [
@@ -1371,17 +1356,32 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       };
     };
 
+    let lastW = 0;
+    let lastH = 0;
+
     const render = () => {
-      const width = canvas.clientWidth || 900;
-      const height = canvas.clientHeight || 650;
-      const centerX = width / 2;
-      const centerY = height / 2;
+      const width = canvas.clientWidth || 180;
+      const height = canvas.clientHeight || 180;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      if (width !== lastW || height !== lastH) {
+        lastW = width;
+        lastH = height;
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
 
       ctx.clearRect(0, 0, width, height);
 
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const baseR = Math.min(width, height) * 0.40;
+      const fov = baseR * 2.8;
+
       const currentState = hudStateRef.current;
       const micLevel = audioLevelRef.current || 0;
-      const dynamicBoost = micLevel * 85;
+      const dynamicBoost = micLevel * (baseR * 0.4);
 
       const speedMult = currentState === "thinking"
         ? 2.8
@@ -1393,7 +1393,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
 
       angle += (currentState === "thinking" ? 0.048 : currentState === "listening" ? 0.025 + micLevel * 0.1 : 0.014) * speedMult;
       pulse += 0.04;
-      const pulseScale = Math.sin(pulse) * 4 + dynamicBoost;
+      const pulseScale = Math.sin(pulse) * (baseR * 0.04) + dynamicBoost;
 
       const curTheme = themeRef.current;
       let primaryColor = "rgba(0, 240, 255, ";
@@ -1433,60 +1433,36 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
         hotspotColor = "#e6fff4";
       }
 
-      // Faint cyber grid in background
-      ctx.save();
-      ctx.strokeStyle = primaryColor + "0.02)";
-      ctx.lineWidth = 0.8;
-      const gStep = 48;
-      for (let gx = 0; gx < width; gx += gStep) {
-        ctx.beginPath();
-        ctx.moveTo(gx, 0);
-        ctx.lineTo(gx, height);
-        ctx.stroke();
-      }
-      for (let gy = 0; gy < height; gy += gStep) {
-        ctx.beginPath();
-        ctx.moveTo(0, gy);
-        ctx.lineTo(width, gy);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // 1. Ambient Dynamic Glow centered on Window Center
-      const ambientGrad = ctx.createRadialGradient(centerX, centerY, 20, centerX, centerY, Math.max(width * 0.65, 520));
-      ambientGrad.addColorStop(0, primaryColor + (currentState === "error" ? "0.38)" : "0.28)"));
-      ambientGrad.addColorStop(0.3, primaryColor + "0.12)");
-      ambientGrad.addColorStop(0.65, primaryColor + "0.03)");
+      // 1. Ambient Dynamic Core Glow
+      const ambientGrad = ctx.createRadialGradient(centerX, centerY, 2, centerX, centerY, baseR * 1.25);
+      ambientGrad.addColorStop(0, primaryColor + (currentState === "error" ? "0.45)" : "0.35)"));
+      ambientGrad.addColorStop(0.35, primaryColor + "0.15)");
+      ambientGrad.addColorStop(0.7, primaryColor + "0.03)");
       ambientGrad.addColorStop(1, "rgba(2, 6, 14, 0)");
       ctx.fillStyle = ambientGrad;
       ctx.fillRect(0, 0, width, height);
 
-      // Clamped radius: prevents outer compass rings and brackets from touching/clipping window edges
-      const maxCompassR = Math.min(centerX - 24, centerY - 24, 250);
-      const baseR = Math.min(width * 0.26, height * 0.36, maxCompassR / 1.15, 220);
-      const fov = baseR * 2.5;
-
       ctx.save();
-      ctx.shadowBlur = 14 + dynamicBoost * 0.4;
+      ctx.shadowBlur = Math.max(6, baseR * 0.22 + dynamicBoost * 0.4);
       ctx.shadowColor = glowColor;
 
-      // 2. Radial Starburst Photon Beams (Center Back)
-      const rayCount = 54;
+      // 2. Radial Starburst Photon Beams
+      const rayCount = width > 80 ? 42 : 20;
       for (let i = 0; i < rayCount; i++) {
         const rayAngle = angle * 0.14 + (i * Math.PI * 2) / rayCount;
-        const isMajor = i % 6 === 0;
-        const isSemi = i % 3 === 0;
+        const isMajor = i % (width > 80 ? 6 : 4) === 0;
+        const isSemi = i % 2 === 0;
 
-        const rStart = baseR * 0.22 + Math.sin(pulse * 2.5 + i * 0.6) * 3;
-        const harmonic = Math.abs(Math.sin(i * 3.1 + pulse * 1.2)) * (baseR * 0.2);
+        const rStart = baseR * 0.22 + Math.sin(pulse * 2.5 + i * 0.6) * (baseR * 0.02);
+        const harmonic = Math.abs(Math.sin(i * 3.1 + pulse * 1.2)) * (baseR * 0.12);
         const stateBoost = currentState === "listening"
-          ? dynamicBoost * 1.4
+          ? dynamicBoost * 1.2
           : currentState === "speaking"
-          ? Math.sin(pulse * 4 + i) * 16 + 18
-          : dynamicBoost * 0.4;
+          ? Math.sin(pulse * 4 + i) * (baseR * 0.15) + (baseR * 0.1)
+          : dynamicBoost * 0.3;
 
         const rayLen = (isMajor ? baseR * 0.45 : isSemi ? baseR * 0.28 : baseR * 0.16) + harmonic + stateBoost;
-        const rEnd = rStart + rayLen;
+        const rEnd = Math.min(baseR * 1.2, rStart + rayLen);
 
         const cosA = Math.cos(rayAngle);
         const sinA = Math.sin(rayAngle);
@@ -1495,66 +1471,51 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
         ctx.moveTo(centerX + cosA * rStart, centerY + sinA * rStart);
         ctx.lineTo(centerX + cosA * rEnd, centerY + sinA * rEnd);
         ctx.strokeStyle = primaryColor + (isMajor ? "0.9)" : isSemi ? "0.5)" : "0.22)");
-        ctx.lineWidth = isMajor ? 1.8 : isSemi ? 1.1 : 0.7;
+        ctx.lineWidth = Math.max(0.6, (isMajor ? 1.6 : isSemi ? 1.0 : 0.6) * (baseR / 60));
         ctx.stroke();
 
-        ctx.beginPath();
-        ctx.arc(centerX + cosA * rEnd, centerY + sinA * rEnd, isMajor ? 2.5 : 1.2, 0, Math.PI * 2);
-        ctx.fillStyle = isMajor ? hotspotColor : primaryColor + "0.85)";
-        ctx.fill();
+        if (width > 60) {
+          ctx.beginPath();
+          ctx.arc(centerX + cosA * rEnd, centerY + sinA * rEnd, Math.max(0.8, (isMajor ? 2.0 : 1.0) * (baseR / 60)), 0, Math.PI * 2);
+          ctx.fillStyle = isMajor ? hotspotColor : primaryColor + "0.85)";
+          ctx.fill();
+        }
       }
 
-      // 3. Technical Outer Compass & Tachymeter Gauge Rings
-      const outerR = baseR * 1.25;
+      // 3. Technical Outer Compass Ring
+      const outerR = baseR * 1.15;
       ctx.beginPath();
       ctx.arc(centerX, centerY, outerR, 0, Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.25)";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = primaryColor + "0.28)";
+      ctx.lineWidth = Math.max(0.6, 1.0 * (baseR / 60));
       ctx.stroke();
 
-      const numTicks = 72;
-      for (let i = 0; i < numTicks; i++) {
-        const tickAngle = -angle * 0.3 + (i * Math.PI * 2) / numTicks;
-        const isMajorTick = i % 6 === 0;
-        const tickLen = isMajorTick ? 14 : 6;
-        const t1 = outerR - tickLen;
-        const t2 = outerR;
-        ctx.beginPath();
-        ctx.moveTo(centerX + Math.cos(tickAngle) * t1, centerY + Math.sin(tickAngle) * t1);
-        ctx.lineTo(centerX + Math.cos(tickAngle) * t2, centerY + Math.sin(tickAngle) * t2);
-        ctx.strokeStyle = primaryColor + (isMajorTick ? "0.85)" : "0.26)");
-        ctx.lineWidth = isMajorTick ? 1.6 : 0.9;
-        ctx.stroke();
+      if (width > 80) {
+        const numTicks = 48;
+        for (let i = 0; i < numTicks; i++) {
+          const tickAngle = -angle * 0.3 + (i * Math.PI * 2) / numTicks;
+          const isMajorTick = i % 6 === 0;
+          const tickLen = isMajorTick ? baseR * 0.08 : baseR * 0.04;
+          const t1 = outerR - tickLen;
+          const t2 = outerR;
+          ctx.beginPath();
+          ctx.moveTo(centerX + Math.cos(tickAngle) * t1, centerY + Math.sin(tickAngle) * t1);
+          ctx.lineTo(centerX + Math.cos(tickAngle) * t2, centerY + Math.sin(tickAngle) * t2);
+          ctx.strokeStyle = primaryColor + (isMajorTick ? "0.85)" : "0.26)");
+          ctx.lineWidth = isMajorTick ? 1.4 : 0.8;
+          ctx.stroke();
+        }
       }
 
       // Segmented Rotating Bracket Ring
-      const bracketR = baseR * 1.14;
-      const bracketSegments = 12;
+      const bracketR = baseR * 1.05;
+      const bracketSegments = width > 80 ? 10 : 6;
       for (let i = 0; i < bracketSegments; i++) {
         const bAngle = angle * 0.5 + (i * Math.PI * 2) / bracketSegments;
         ctx.beginPath();
-        ctx.arc(centerX, centerY, bracketR, bAngle, bAngle + 0.35);
+        ctx.arc(centerX, centerY, bracketR, bAngle, bAngle + 0.32);
         ctx.strokeStyle = primaryColor + (i % 2 === 0 ? "0.92)" : "0.45)");
-        ctx.lineWidth = currentState === "listening" ? 3.5 : 2.5;
-        ctx.stroke();
-
-        const dotAngle = bAngle + 0.35;
-        ctx.beginPath();
-        ctx.arc(centerX + Math.cos(dotAngle) * bracketR, centerY + Math.sin(dotAngle) * bracketR, 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = primaryColor + "0.95)";
-        ctx.fill();
-      }
-
-      // Cardinal HUD reticle marks
-      for (const a of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]) {
-        const retAngle = a + angle * 0.1;
-        const r1 = baseR * 1.05;
-        const r2 = baseR * 1.12;
-        ctx.beginPath();
-        ctx.moveTo(centerX + Math.cos(retAngle) * r1, centerY + Math.sin(retAngle) * r1);
-        ctx.lineTo(centerX + Math.cos(retAngle) * r2, centerY + Math.sin(retAngle) * r2);
-        ctx.strokeStyle = hotspotColor;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = Math.max(0.8, (currentState === "listening" ? 2.4 : 1.6) * (baseR / 60));
         ctx.stroke();
       }
 
@@ -1562,7 +1523,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       orbitalRings.forEach((ring) => {
         const currentR = baseR * ring.rRel;
         const ringRot = angle * (ring.speed / 0.015);
-        const segCount = 60;
+        const segCount = width > 80 ? 48 : 28;
         const projected: { x: number; y: number; z: number; scale: number }[] = [];
 
         for (let m = 0; m < segCount; m++) {
@@ -1582,70 +1543,51 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p2.x, p2.y);
 
+          const scaleRatio = Math.max(0.6, baseR / 60);
           if (avgZ < 0) {
             ctx.strokeStyle = primaryColor + Math.min(0.95, 0.72 + 0.28 * (avgScale - 0.7)) + ")";
-            ctx.lineWidth = Math.max(1.2, 1.9 * avgScale);
+            ctx.lineWidth = Math.max(0.8, 1.6 * avgScale * scaleRatio);
           } else {
-            ctx.strokeStyle = primaryColor + Math.max(0.18, 0.25 * avgScale) + ")";
-            ctx.lineWidth = Math.max(0.7, 1.0 * avgScale);
+            ctx.strokeStyle = primaryColor + Math.max(0.2, 0.28 * avgScale) + ")";
+            ctx.lineWidth = Math.max(0.5, 0.9 * avgScale * scaleRatio);
           }
           ctx.stroke();
         }
 
         // Orbiting photon nodes
-        for (let j = 0; j < ring.nodes; j++) {
-          const nodeAngle = ringRot * 2.2 + (j * Math.PI * 2) / ring.nodes;
-
-          for (let t = 3; t >= 1; t--) {
-            const sparkAngle = nodeAngle - t * 0.06;
-            const sx = currentR * Math.cos(sparkAngle);
-            const sy = currentR * Math.sin(sparkAngle);
-            const sparkPt = projectPoint(sx, sy, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov);
+        if (width > 80) {
+          for (let j = 0; j < ring.nodes; j++) {
+            const nodeAngle = ringRot * 2.2 + (j * Math.PI * 2) / ring.nodes;
+            const nx = currentR * Math.cos(nodeAngle);
+            const ny = currentR * Math.sin(nodeAngle);
+            const nodePt = projectPoint(nx, ny, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov);
 
             ctx.beginPath();
-            ctx.arc(sparkPt.x, sparkPt.y, Math.max(0.8, (2.2 - t * 0.5) * sparkPt.scale), 0, Math.PI * 2);
-            ctx.fillStyle = primaryColor + (0.45 / t) + ")";
+            ctx.arc(nodePt.x, nodePt.y, Math.max(1, 4.5 * nodePt.scale * (baseR / 60)), 0, Math.PI * 2);
+            ctx.fillStyle = primaryColor + "0.35)";
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(nodePt.x, nodePt.y, Math.max(0.8, 2.0 * nodePt.scale * (baseR / 60)), 0, Math.PI * 2);
+            ctx.fillStyle = hotspotColor;
             ctx.fill();
           }
-
-          const nx = currentR * Math.cos(nodeAngle);
-          const ny = currentR * Math.sin(nodeAngle);
-          const nodePt = projectPoint(nx, ny, 0, ring.tiltX, ring.tiltY, ringRot, centerX, centerY, fov);
-
-          ctx.beginPath();
-          ctx.arc(nodePt.x, nodePt.y, 6.5 * nodePt.scale, 0, Math.PI * 2);
-          ctx.fillStyle = primaryColor + "0.35)";
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(nodePt.x, nodePt.y, 2.8 * nodePt.scale, 0, Math.PI * 2);
-          ctx.fillStyle = hotspotColor;
-          ctx.fill();
         }
       });
 
-      // 5. Inner Tech Reference Rings
+      // 5. Inner Reference & Audio Waveform Ring
       ctx.beginPath();
       ctx.arc(centerX, centerY, baseR * 0.38, 0, Math.PI * 2);
       ctx.strokeStyle = primaryColor + "0.35)";
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = Math.max(0.6, 1.0 * (baseR / 60));
       ctx.stroke();
 
-      ctx.beginPath();
-      ctx.setLineDash([4, 6]);
-      ctx.arc(centerX, centerY, baseR * 0.30, -angle * 0.8, -angle * 0.8 + Math.PI * 2);
-      ctx.strokeStyle = primaryColor + "0.5)";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 5b. Live Circular Audio Waveform Ring
-      const wavePoints = 56;
+      const wavePoints = width > 80 ? 44 : 24;
       ctx.beginPath();
       for (let w = 0; w <= wavePoints; w++) {
         const theta = (w * Math.PI * 2) / wavePoints;
-        const waveAmp = (currentState === "listening" ? dynamicBoost * 0.45 : currentState === "speaking" ? 7 : 2) *
-          Math.sin(theta * 7 + pulse * 4);
+        const waveAmp = (currentState === "listening" ? dynamicBoost * 0.45 : currentState === "speaking" ? (baseR * 0.08) : (baseR * 0.025)) *
+          Math.sin(theta * 6 + pulse * 4);
         const wr = baseR * 0.44 + waveAmp;
         const wx = centerX + Math.cos(theta) * wr;
         const wy = centerY + Math.sin(theta) * wr;
@@ -1654,22 +1596,22 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       }
       ctx.closePath();
       ctx.strokeStyle = primaryColor + (currentState === "listening" ? "0.95)" : "0.55)");
-      ctx.lineWidth = currentState === "listening" ? 2.5 : 1.4;
+      ctx.lineWidth = Math.max(0.8, (currentState === "listening" ? 2.2 : 1.2) * (baseR / 60));
       ctx.stroke();
 
-      // 6. Central Singularity & Pulsing Energy Core
+      // 6. Central Core & Energy Singularity
       const baseCoreRadius = (currentState === "thinking"
         ? baseR * 0.22
         : currentState === "listening"
         ? baseR * 0.25 + dynamicBoost * 0.4
         : baseR * 0.20);
-      const coreRadius = Math.max(28, baseCoreRadius + pulseScale);
+      const coreRadius = Math.max(4, baseCoreRadius + pulseScale);
 
-      const coreGrad = ctx.createRadialGradient(centerX, centerY, 4, centerX, centerY, coreRadius * 2.2);
+      const coreGrad = ctx.createRadialGradient(centerX, centerY, 1, centerX, centerY, coreRadius * 2.2);
       coreGrad.addColorStop(0, hotspotColor);
-      coreGrad.addColorStop(0.2, primaryColor + "1.0)");
-      coreGrad.addColorStop(0.5, primaryColor + "0.65)");
-      coreGrad.addColorStop(0.8, primaryColor + "0.22)");
+      coreGrad.addColorStop(0.25, primaryColor + "1.0)");
+      coreGrad.addColorStop(0.55, primaryColor + "0.65)");
+      coreGrad.addColorStop(0.85, primaryColor + "0.22)");
       coreGrad.addColorStop(1, primaryColor + "0)");
 
       ctx.beginPath();
@@ -1678,68 +1620,30 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(centerX, centerY, coreRadius * 0.75, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, Math.max(3, coreRadius * 0.75), 0, Math.PI * 2);
       ctx.strokeStyle = primaryColor + "0.95)";
-      ctx.lineWidth = 2.4;
+      ctx.lineWidth = Math.max(0.8, 1.8 * (baseR / 60));
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.arc(centerX, centerY, 15, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, Math.max(2, baseR * 0.08), 0, Math.PI * 2);
       ctx.fillStyle = hotspotColor;
       ctx.fill();
 
       // Speaking sonic shockwaves
       if (currentState === "speaking") {
         for (let w = 0; w < 3; w++) {
-          const waveR = ((pulse * 45 + w * 40) % (baseR * 0.8)) + 18;
-          const waveAlpha = Math.max(0, 1 - waveR / (baseR * 0.85)) * 0.7;
+          const waveR = ((pulse * 30 + w * (baseR * 0.35)) % (baseR * 0.9)) + (baseR * 0.15);
+          const waveAlpha = Math.max(0, 1 - waveR / (baseR * 0.9)) * 0.7;
           ctx.beginPath();
           ctx.arc(centerX, centerY, waveR, 0, Math.PI * 2);
           ctx.strokeStyle = primaryColor + waveAlpha + ")";
-          ctx.lineWidth = 1.8;
+          ctx.lineWidth = Math.max(0.6, 1.4 * (baseR / 60));
           ctx.stroke();
         }
       }
 
       ctx.restore();
-
-      // 7. Floating Cyber Particle Field Across the Whole Window
-      ctx.save();
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        if (p.x < 0) p.x = width;
-        if (p.x > width) p.x = 0;
-        if (p.y < 0) p.y = height;
-        if (p.y > height) p.y = 0;
-
-        const currentAlpha = p.alpha * (0.7 + 0.3 * Math.sin(pulse * 2 * p.pulseSpeed + p.pulseOffset));
-
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = primaryColor + currentAlpha + ")";
-        ctx.fill();
-
-        for (let j = i + 1; j < particles.length; j++) {
-          const p2 = particles[j];
-          const dx = p.x - p2.x;
-          const dy = p.y - p2.y;
-          const distSq = dx * dx + dy * dy;
-          if (distSq < 7200) {
-            const dist = Math.sqrt(distSq);
-            const lineAlpha = (1 - dist / 85) * 0.08;
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(p2.x, p2.y);
-            ctx.strokeStyle = primaryColor + lineAlpha + ")";
-            ctx.lineWidth = 0.7;
-            ctx.stroke();
-          }
-        }
-      }
-      ctx.restore();
-
       animId = requestAnimationFrame(render);
     };
 
@@ -1747,7 +1651,6 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
 
     return () => {
       cancelAnimationFrame(animId);
-      window.removeEventListener("resize", resize);
     };
   }, []);
 
@@ -1758,10 +1661,10 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
     }
   };
 
+  const hasMessages = logs.filter((log) => log.id !== "init").length > 0;
+
   return (
     <div className="viper-hud-container" data-theme={theme}>
-      {/* Background Holographic HUD & Particle Canvas */}
-      <canvas ref={bgCanvasRef} className="viper-hud-bg-canvas" aria-hidden="true" />
 
       {/* Top Controls Header */}
       <div className="viper-top-bar">
@@ -2005,7 +1908,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
                 ))}
                 <button
                   type="button"
-                  className="add-action-btn"
+                  className={`cat-btn ${isAddingAction ? "active" : ""}`}
                   onClick={() => setIsAddingAction(!isAddingAction)}
                   title="Add custom quick action button"
                 >
@@ -2095,16 +1998,22 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
         </div>
 
         {/* Right Column: Cyber Action Terminal & Directive Feed */}
-        <div className="viper-terminal-section">
+        <div className={`viper-terminal-section ${hasMessages ? "has-messages" : "is-empty"}`}>
           {/* HUD Corner Brackets */}
           <span className="hud-corner hud-corner-tl" aria-hidden="true" />
           <span className="hud-corner hud-corner-tr" aria-hidden="true" />
           <span className="hud-corner hud-corner-bl" aria-hidden="true" />
           <span className="hud-corner hud-corner-br" aria-hidden="true" />
 
+          {/* Glowing Arc Reactor Orb (180px in Empty State -> 48px Header on Message) */}
+          <div className={`chat-orb-wrapper ${hasMessages ? "in-header" : "in-empty-state"}`} aria-hidden="true">
+            <canvas ref={chatOrbCanvasRef} className="chat-orb-canvas" />
+          </div>
+
           <div className="terminal-header">
             <div className="terminal-title">
-              <span className="terminal-dot"></span> CONVERSATION FEED
+              {!hasMessages && <span className="terminal-dot"></span>}
+              CONVERSATION FEED
             </div>
             <div className="terminal-actions">
               <button
@@ -2165,7 +2074,7 @@ export function ViperHUD({ onNavigateModule }: { onNavigateModule?: (mod: string
 
             {logs.filter((log) => log.id !== "init").length === 0 && (
               <div className="conversation-empty-state">
-                <span className="conversation-empty-logo" aria-hidden="true">V</span>
+                <div className="empty-state-orb-spacer" aria-hidden="true" />
                 <strong className="empty-state-title">How can I help, Sir?</strong>
                 <span className="empty-state-subtitle">Ask a question, give a voice command, or type below.</span>
               </div>

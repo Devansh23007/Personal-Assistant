@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ViperHUD } from "./ViperHUD";
+import { ViperHUD, type ViperStatus } from "./ViperHUD";
 
 declare global {
   interface Window {
@@ -11,6 +11,7 @@ declare global {
 
 function App() {
   const [isOpen, setIsOpen] = useState(false);
+  const [hudState, setHudState] = useState<ViperStatus>("armed");
 
   const setExpanded = (expanded: boolean) => {
     setIsOpen(expanded);
@@ -27,7 +28,10 @@ function App() {
         aria-hidden={!isOpen}
       >
         <header className="viper-widget-titlebar">
-          <span className="viper-widget-logo" aria-hidden="true">V</span>
+          <span className="viper-widget-logo" aria-hidden="true">
+            V
+            <span className={`titlebar-status-dot state-${hudState}`} />
+          </span>
           <span className="viper-widget-title">
             <strong>V.I.P.E.R.</strong>
             <small>Personal assistant</small>
@@ -38,7 +42,7 @@ function App() {
           </div>
         </header>
         <div className="viper-widget-content">
-          <ViperHUD />
+          <ViperHUD onStateChange={setHudState} />
         </div>
       </section>
 
@@ -51,7 +55,7 @@ function App() {
           onClick={() => void setExpanded(true)}
         >
           <span className="viper-widget-logo launcher-logo" aria-hidden="true">V</span>
-          <span className="viper-widget-launcher-pulse" aria-hidden="true" />
+          <span className={`viper-widget-launcher-pulse state-${hudState}`} aria-hidden="true" />
         </button>
       )}
     </div>
