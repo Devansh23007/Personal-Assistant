@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
@@ -7,10 +7,14 @@ import urllib.parse
 from sqlalchemy.orm import Session
 
 from app.core.app_launcher import (
+    APP_ALIASES,
+    close_active_browser_tab_status,
+    close_app_window_status,
     launch_desktop_app,
     navigate_current_browser_tab,
     open_url_with_preferred_browser,
 )
+from app.core.app_index import WEB_SERVICES, find_installed_app, get_app_preference, set_app_preference
 from app.core.config import settings
 from app.modules.auth.models import User
 from app.modules.autoflow.service import (
@@ -61,6 +65,7 @@ from app.modules.spendwise.service import (
     list_budgets_with_progress as spendwise_list_budgets,
     seed_demo_transactions_if_empty as spendwise_seed_demo,
 )
+from app.modules.screen_assistant.service import inspect_current_screen
 
 
 @dataclass
@@ -68,9 +73,26 @@ class ToolContext:
     user: User | None = None
     db: Session | None = None
     browser: str | None = None
+    screen_app_name: str | None = None
+    screen_window_title: str | None = None
+    screen_preflight_complete: bool = False
+    screen_verification_pending: bool = False
+    screen_inspection_error: str | None = None
+    close_confirmation_allowed: bool = False
+    screen_read_requested: bool | None = None
 
 
 ToolHandler = Callable[[dict[str, object], ToolContext], str]
+AsyncToolHandler = Callable[[dict[str, object], ToolContext], Awaitable[str]]
+
+SCREEN_AWARE_ACTIONS = {
+    "open_target",
+    "close_target",
+    "open_desktop_app",
+    "open_url",
+    "navigate_current_tab",
+    "search_web",
+}
 
 
 # --- Starter Tools ---
@@ -83,6 +105,88 @@ def _open_desktop_app(arguments: dict[str, object], _: ToolContext) -> str:
     app_name = str(arguments.get("app_name", "")).strip()
     success, message = launch_desktop_app(app_name)
     return message if success else f"I couldn't open that app. {message}"
+
+
+def _open_target(arguments: dict[str, object], context: ToolContext) -> str:
+    target = str(arguments.get("target", "")).strip()
+    kind = str(arguments.get("kind", "auto")).lower()
+    if not target:
+        return "Please say what you want to open."
+    browser = str(arguments.get("browser") or context.browser or settings.preferred_browser).strip()
+    service_key = " ".join(target.casefold().split())
+    url = WEB_SERVICES.get(service_key)
+    installed = find_installed_app(target, APP_ALIASES)
+    choice = kind
+    if kind == "auto" and installed and url:
+        choice = get_app_preference(target) or settings.open_target_preference.lower()
+        if choice == "ask":
+            return f"{target} is available as a desktop app and a website. Ask the user which one they prefer, then remember that choice."
+    elif kind == "auto":
+        choice = "app" if installed else "web" if url else "unknown"
+    if choice == "app":
+        ok, message = launch_desktop_app(target)
+        if ok:
+            set_app_preference(target, "app")
+        return message if ok else f"I couldn't open it. {message}"
+    if choice == "web":
+        if not url:
+            if "." not in target:
+                return f"I don't have a known website address for {target}. Please provide its URL."
+            url = target if target.startswith(("https://", "http://")) else "https://" + target
+        ok = open_url_with_preferred_browser(url, browser)
+        if ok:
+            set_app_preference(target, "web")
+        return f"Opened {url} in {browser}." if ok else f"Couldn't open {url} in {browser}."
+    if installed:
+        ok, message = launch_desktop_app(target)
+        return message if ok else message
+    return f"I couldn't resolve '{target}' as an installed app or known website. Ask which one you mean."
+
+
+def _browser_from_active_app(app_name: str | None) -> str | None:
+    if not app_name:
+        return None
+    process_name = app_name.casefold().rsplit("\\", 1)[-1]
+    return {
+        "chrome": "Google Chrome",
+        "chrome.exe": "Google Chrome",
+        "msedge": "Microsoft Edge",
+        "msedge.exe": "Microsoft Edge",
+        "brave": "Brave",
+        "brave.exe": "Brave",
+        "firefox": "Firefox",
+        "firefox.exe": "Firefox",
+        "opera": "Opera",
+        "opera.exe": "Opera",
+        "vivaldi": "Vivaldi",
+        "vivaldi.exe": "Vivaldi",
+    }.get(process_name)
+
+
+def _close_target(arguments: dict[str, object], context: ToolContext) -> str:
+    target = str(arguments.get("target", "")).strip()
+    kind = str(arguments.get("kind", "auto")).lower()
+    if not target:
+        return "Please say which app or browser tab to close."
+    if not bool(arguments.get("confirmed", False)):
+        return f"Closing {target} may interrupt work. Ask the user to confirm before closing it."
+    if not context.close_confirmation_allowed:
+        return "The user has not confirmed this close action in a separate message. Ask for confirmation and do not close it yet."
+    if kind == "web" or target.casefold() in {"tab", "current tab", "browser tab"}:
+        active_browser = _browser_from_active_app(context.screen_app_name)
+        if context.screen_app_name and not active_browser and not arguments.get("browser"):
+            return "The inspected foreground window is not a recognized browser. Ask which browser tab the user wants to close."
+        browser = str(
+            arguments.get("browser")
+            or active_browser
+            or context.browser
+            or settings.preferred_browser
+        )
+        return close_active_browser_tab_status(browser)[1]
+    all_windows = bool(arguments.get("all_windows", False))
+    force = bool(arguments.get("force", False))
+    _, reason = close_app_window_status(target, all_windows=all_windows, force=force)
+    return reason
 
 
 def _open_url(arguments: dict[str, object], context: ToolContext) -> str:
@@ -124,6 +228,20 @@ def _navigate_current_tab(arguments: dict[str, object], context: ToolContext) ->
     if navigate_current_browser_tab(url, browser):
         return f"Navigated the current {browser} tab to {url}."
     return f"I couldn't access an open {browser} window to navigate its current tab."
+
+
+async def _inspect_current_screen(_: dict[str, object], context: ToolContext) -> str:
+    was_verifying_action = context.screen_verification_pending
+    observation = await inspect_current_screen()
+    context.screen_app_name = observation.app_name
+    context.screen_window_title = observation.window_title
+    context.screen_inspection_error = observation.reason if not observation.available else None
+    if observation.available:
+        context.screen_verification_pending = False
+        context.screen_preflight_complete = not was_verifying_action
+    else:
+        context.screen_preflight_complete = False
+    return observation.as_tool_result()
 
 
 # --- LifeOS Tools ---
@@ -560,6 +678,41 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "inspect_current_screen",
+            "description": "Take an on-demand, privacy-filtered screenshot and describe the active app/window and visible UI. Use before app or tab actions and again after the action to verify it. Do not use for unrelated requests.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_target",
+            "description": "Resolve a requested target predictably and open it. Use kind app for desktop, web for website, or auto for installed app first then known web services. Respect a named browser.",
+            "parameters": {"type": "object", "properties": {
+                "target": {"type": "string"},
+                "kind": {"type": "string", "enum": ["app", "web", "auto"]},
+                "browser": {"type": "string"},
+            }, "required": ["target", "kind"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_target",
+            "description": "Close a desktop app window or browser tab. Ask for user confirmation before invoking with confirmed=true. Use all_windows only when explicitly requested.",
+            "parameters": {"type": "object", "properties": {
+                "target": {"type": "string"},
+                "kind": {"type": "string", "enum": ["app", "web", "auto"]},
+                "browser": {"type": "string"},
+                "all_windows": {"type": "boolean"},
+                "force": {"type": "boolean", "description": "Terminate the process only after explicit user confirmation."},
+                "confirmed": {"type": "boolean"},
+            }, "required": ["target", "kind"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_desktop_app",
             "description": "Open a locally installed desktop application on the user's computer by its Start menu name, such as Chrome, Word, Spotify, Notepad, or Calculator. Use this when the user asks to open or launch an app. If it is not installed or cannot be found, report that clearly and do not claim success.",
             "parameters": {
@@ -913,6 +1066,8 @@ TOOL_DEFINITIONS = [
 ]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
+    "open_target": _open_target,
+    "close_target": _close_target,
     "open_desktop_app": _open_desktop_app,
     "open_url": _open_url,
     "navigate_current_tab": _navigate_current_tab,
@@ -940,6 +1095,10 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "trigger_workflow": _trigger_workflow,
 }
 
+ASYNC_TOOL_HANDLERS: dict[str, AsyncToolHandler] = {
+    "inspect_current_screen": _inspect_current_screen,
+}
+
 
 def run_tool(name: str, arguments: dict[str, object], context: ToolContext | None = None) -> str:
     handler = TOOL_HANDLERS.get(name)
@@ -947,3 +1106,34 @@ def run_tool(name: str, arguments: dict[str, object], context: ToolContext | Non
         return "Tool is not available."
     ctx = context or ToolContext()
     return handler(arguments, ctx)
+
+
+async def run_tool_async(
+    name: str,
+    arguments: dict[str, object],
+    context: ToolContext | None = None,
+) -> str:
+    ctx = context or ToolContext()
+    async_handler = ASYNC_TOOL_HANDLERS.get(name)
+    if async_handler:
+        return await async_handler(arguments, ctx)
+
+    if name in SCREEN_AWARE_ACTIONS:
+        if ctx.screen_verification_pending:
+            return "Inspect the screen to verify the previous action before starting another app or tab action."
+        if not ctx.screen_preflight_complete:
+            if ctx.screen_inspection_error:
+                return f"{ctx.screen_inspection_error} No app or tab action was performed."
+            return "Inspect the current screen before performing an app or tab action."
+        if name == "close_target" and bool(arguments.get("confirmed", False)) and not ctx.close_confirmation_allowed:
+            return "The user has not confirmed this close action in a separate message. Ask for confirmation and do not close it yet."
+
+        ctx.screen_preflight_complete = False
+        result = run_tool(name, arguments, ctx)
+        if name != "close_target" or (
+            bool(arguments.get("confirmed", False)) and ctx.close_confirmation_allowed
+        ):
+            ctx.screen_verification_pending = True
+        return result
+
+    return run_tool(name, arguments, ctx)

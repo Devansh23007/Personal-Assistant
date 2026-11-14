@@ -58,6 +58,16 @@ COMMAND_ALIASES = {
     "taskmgr": ["taskmgr.exe"],
 }
 
+_opened_processes: dict[str, int] = {}
+
+
+def _record_open_process(target: str, process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> None:
+    normalized = " ".join(target.lower().split())
+    canonical = APP_ALIASES.get(normalized, normalized)
+    if process.pid:
+        _opened_processes[normalized] = process.pid
+        _opened_processes[" ".join(canonical.lower().split())] = process.pid
+
 
 def launch_desktop_app(target: str) -> tuple[bool, str]:
     """Launch an installed app by Start menu name or a known command alias."""
@@ -76,7 +86,8 @@ def launch_desktop_app(target: str) -> tuple[bool, str]:
     command = COMMAND_ALIASES.get(normalized)
     if command:
         try:
-            subprocess.Popen(command, shell=False)
+            process = subprocess.Popen(command, shell=False)
+            _record_open_process(name, process)
             return True, f"Opened {name}."
         except OSError:
             # Some Windows apps are installed as packaged apps and only appear
@@ -84,38 +95,38 @@ def launch_desktop_app(target: str) -> tuple[bool, str]:
             pass
 
     app_name = APP_ALIASES.get(normalized, name)
-    if os.name == "nt":
-        encoded_name = base64.b64encode(app_name.encode("utf-8")).decode("ascii")
-        script = rf"""
-$name = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_name}'))
-$app = Get-StartApps -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -ieq $name }} | Select-Object -First 1
-if ($app -and $app.AppID) {{
-  Start-Process -FilePath "$env:WINDIR\explorer.exe" -ArgumentList @('shell:AppsFolder\' + $app.AppID)
-  exit 0
-}}
-$cmd = Get-Command -CommandType Application -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -ieq $name -or $_.Name -ieq ($name + '.exe') }} | Select-Object -First 1
-if ($cmd) {{ Start-Process -FilePath $cmd.Source; exit 0 }}
-exit 2
-"""
-        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    from app.core.app_index import find_installed_app
+    installed = find_installed_app(app_name, APP_ALIASES)
+    if installed:
         try:
-            result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded_script],
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-            )
-            if result.returncode == 0:
-                return True, f"Opened {name}."
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        return False, f"I couldn't find an installed app named '{name}'."
+            if installed.app_id and os.name == "nt":
+                process = subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{installed.app_id}"], shell=False)
+            elif installed.shortcut and os.name == "nt":
+                os.startfile(installed.shortcut)  # type: ignore[attr-defined]
+                process = None
+            elif installed.executable:
+                process = subprocess.Popen([installed.executable], shell=False)
+            else:
+                executable = shutil.which(normalized)
+                if executable:
+                    process = subprocess.Popen([executable], shell=False)
+                elif installed.app_id and os.name == "nt":
+                    process = subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{installed.app_id}"], shell=False)
+                else:
+                    return False, f"'{installed.name}' is indexed, but its launch target is unavailable."
+            if process is not None and not installed.app_id:
+                _record_open_process(name, process)
+            return True, f"Opened {installed.name}."
+        except OSError as exc:
+            return False, f"Couldn't open {installed.name}: {exc}"
+    if os.name == "nt":
+        return False, f"I couldn't find an installed app matching '{name}'."
 
     executable = shutil.which(normalized)
     if executable:
         try:
-            subprocess.Popen([executable], shell=False)
+            process = subprocess.Popen([executable], shell=False)
+            _record_open_process(name, process)
             return True, f"Opened {name}."
         except OSError as exc:
             return False, f"Couldn't open {name}: {exc}"
@@ -182,7 +193,7 @@ def open_url_with_preferred_browser(url: str, preferred_browser: str = "Brave") 
     return False
 
 
-def _run_hidden_powershell(script: str) -> bool:
+def _execute_hidden_powershell(script: str) -> tuple[int | None, str]:
     encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
         result = subprocess.run(
@@ -192,9 +203,15 @@ def _run_hidden_powershell(script: str) -> bool:
             timeout=8,
             check=False,
         )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        return result.returncode, (result.stderr or result.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        return None, "PowerShell timed out after 8 seconds."
+    except OSError as exc:
+        return -1, str(exc)
+
+
+def _run_hidden_powershell(script: str) -> bool:
+    return _execute_hidden_powershell(script)[0] == 0
 
 
 def navigate_current_browser_tab(url: str, preferred_browser: str = "Brave") -> bool:
@@ -221,10 +238,10 @@ exit 0
     return _run_hidden_powershell(script)
 
 
-def close_active_browser_tab(preferred_browser: str = "Brave") -> bool:
+def close_active_browser_tab_status(preferred_browser: str = "Brave") -> tuple[bool, str]:
     """Close the active tab in the requested browser with a normal Ctrl+W request."""
     if os.name != "nt" or not preferred_browser.strip():
-        return False
+        return False, "Tab close is only available on Windows, or no browser was selected."
     browser = " ".join(preferred_browser.strip().lower().split())
     window_name = {
         "google chrome": "Chrome",
@@ -249,19 +266,81 @@ Start-Sleep -Milliseconds 150
 $shell.SendKeys('^w')
 exit 0
 """
-    return _run_hidden_powershell(script)
+    code, detail = _execute_hidden_powershell(script)
+    if code == 0:
+        return True, f"Windows sent Ctrl+W to the active {window_name} window."
+    if code == 2:
+        return False, f"No active {window_name} window accepted the tab-close request. (PowerShell exit code 2)"
+    if code is None:
+        return False, detail
+    return False, f"Tab close failed with PowerShell exit code {code}. {detail}".strip()
 
 
-def close_app_window(target: str) -> bool:
+def close_active_browser_tab(preferred_browser: str = "Brave") -> bool:
+    return close_active_browser_tab_status(preferred_browser)[0]
+
+
+def close_app_window_status(target: str, all_windows: bool = False, force: bool = False) -> tuple[bool, str]:
     """Request a graceful app-managed close for a matching desktop window."""
     if os.name != "nt" or not target.strip():
-        return False
+        return False, "Desktop window close is only available on Windows, or the target was empty."
     normalized = " ".join(target.lower().split())
     app_name = APP_ALIASES.get(normalized, target.strip())
     command = COMMAND_ALIASES.get(normalized)
     process_hint = os.path.splitext(os.path.basename(command[0]))[0] if command else app_name
+    process_hint = {
+        "word": "WINWORD", "microsoft word": "WINWORD", "visual studio code": "Code",
+        "vs code": "Code", "vscode": "Code", "microsoft store": "WinStore.App",
+        "google chrome": "chrome", "brave browser": "brave", "microsoft edge": "msedge",
+    }.get(normalized, process_hint)
     encoded_app = base64.b64encode(app_name.encode("utf-8")).decode("ascii")
     encoded_process = base64.b64encode(process_hint.encode("utf-8")).decode("ascii")
+    tracked_pid = _opened_processes.get(normalized, 0)
+    if force:
+        process_name = {"chrome": "chrome", "google chrome": "chrome", "brave": "brave", "brave browser": "brave", "edge": "msedge", "microsoft edge": "msedge"}.get(normalized, process_hint)
+        encoded_name = base64.b64encode(process_name.encode("utf-8")).decode("ascii")
+        tracked_pid = _opened_processes.get(normalized, 0)
+        script = rf"""
+$name = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_name}'))
+$procs = @()
+if ({tracked_pid} -gt 0) {{ $tracked = Get-Process -Id {tracked_pid} -ErrorAction SilentlyContinue; if ($tracked) {{ $procs += $tracked }} }}
+if ($procs.Count -eq 0) {{
+  $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ProcessName -ieq $name -or ($_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) }})
+}}
+if ($procs.Count -eq 0) {{ exit 2 }}
+$ids = @($procs | ForEach-Object {{ $_.Id }})
+Stop-Process -Id $ids -Force -ErrorAction Stop
+exit 0
+"""
+        code, detail = _execute_hidden_powershell(script)
+        if code == 0:
+            return True, f"Force-closed {process_name} after confirmation."
+        if code == 2:
+            return False, f"No running {process_name} process was found. (PowerShell exit code 2)"
+        if code is None:
+            return False, detail
+        return False, f"Force close failed with PowerShell exit code {code}. {detail}".strip()
+    if all_windows:
+        process_name = {"chrome": "chrome", "google chrome": "chrome", "brave": "brave", "brave browser": "brave", "edge": "msedge", "microsoft edge": "msedge", "firefox": "firefox"}.get(normalized, process_hint)
+        encoded_name = base64.b64encode(process_name.encode("utf-8")).decode("ascii")
+        script = rf"""
+$name = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_name}'))
+$procs = @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object {{ $_.MainWindowHandle -ne 0 }})
+if ($procs.Count -eq 0) {{ exit 2 }}
+$accepted = 0
+foreach ($proc in $procs) {{ if ($proc.CloseMainWindow()) {{ $accepted++ }} }}
+if ($accepted -eq 0) {{ exit 4 }}
+exit 0
+"""
+        code, detail = _execute_hidden_powershell(script)
+        if code == 0:
+            return True, f"Windows accepted close requests for {process_name} windows."
+        if code == 2:
+            return False, f"No visible {process_name} windows are running. (PowerShell exit code 2)"
+        if code is None:
+            return False, detail
+        return False, f"Windows did not accept a graceful close request. (PowerShell exit code {code}) {detail}".strip()
+
     script = rf"""
 $appName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_app}'))
 $processHint = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_process}'))
@@ -284,7 +363,7 @@ public static class ViperDesktopWindowMatcher {{
         return Regex.Replace((value ?? "").ToLowerInvariant(), "[^a-z0-9]", "");
     }}
 
-    public static IntPtr FindWindow(string appName, string processHint) {{
+    public static IntPtr FindWindow(string appName, string processHint, int trackedPid) {{
         string normalizedApp = Normalize(appName);
         string normalizedProcess = Normalize(processHint);
         IntPtr match = IntPtr.Zero;
@@ -303,7 +382,9 @@ public static class ViperDesktopWindowMatcher {{
             try {{ processName = Normalize(Process.GetProcessById((int)processId).ProcessName); }} catch {{ }}
 
             int score = 0;
-            if ((normalizedApp.Length > 0 && processName == normalizedApp) ||
+            if (trackedPid > 0 && processId == (uint)trackedPid) {{
+                score = 5;
+            }} else if ((normalizedApp.Length > 0 && processName == normalizedApp) ||
                 (normalizedProcess.Length > 0 && processName == normalizedProcess)) {{
                 score = 4;
             }} else if (lastAppWord.Length >= 4 && processName.Contains(lastAppWord)) {{
@@ -326,10 +407,25 @@ public static class ViperDesktopWindowMatcher {{
 }}
 '@
 try {{ Add-Type -TypeDefinition $source -ErrorAction Stop }} catch {{ exit 3 }}
-$window = [ViperDesktopWindowMatcher]::FindWindow($appName, $processHint)
+$window = [ViperDesktopWindowMatcher]::FindWindow($appName, $processHint, {tracked_pid})
 if ($window -eq [IntPtr]::Zero) {{ exit 2 }}
 # WM_CLOSE requests an ordinary, app-managed close (including unsaved-work prompts).
 if ([ViperDesktopWindowMatcher]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {{ exit 0 }}
 exit 4
 """
-    return _run_hidden_powershell(script)
+    code, detail = _execute_hidden_powershell(script)
+    if code == 0:
+        return True, f"Windows accepted the close request for {target}."
+    if code == 2:
+        return False, f"No visible window matched {target}. (PowerShell exit code 2)"
+    if code == 3:
+        return False, f"Could not initialize the window matcher. (PowerShell exit code 3) {detail}".strip()
+    if code == 4:
+        return False, f"Windows rejected the close request for {target}. (PowerShell exit code 4)"
+    if code is None:
+        return False, detail
+    return False, f"Window close failed with PowerShell exit code {code}. {detail}".strip()
+
+
+def close_app_window(target: str, all_windows: bool = False) -> bool:
+    return close_app_window_status(target, all_windows=all_windows)[0]

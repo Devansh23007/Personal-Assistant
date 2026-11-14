@@ -1,6 +1,6 @@
 # V.I.P.E.R. — Virtual Intelligent Personal Electronic Respondent
 
-V.I.P.E.R. (Virtual Intelligent Personal Electronic Respondent) is a modular personal productivity assistant. This repository is at the **Project Foundation** stage: it has a React + TypeScript dashboard, a FastAPI modular monolith, PostgreSQL setup, account registration/sign-in, and an optional LLM chat endpoint with a read-only tool registry.
+V.I.P.E.R. (Virtual Intelligent Personal Electronic Respondent) is a modular personal productivity assistant. This repository is at the **Project Foundation** stage: it has a React + TypeScript dashboard, a FastAPI modular monolith, PostgreSQL setup, account registration/sign-in, and an optional LLM chat endpoint with a bounded tool registry.
 
 ## Start locally (Windows PowerShell)
 
@@ -53,7 +53,15 @@ LLM_API_KEY=your_key_here
 LLM_MODEL=your_model_id_here
 ```
 
-Restart FastAPI. Without these values, the rest of the app works and chat returns a clear “not configured” response. The first tool is read-only and reports the server clock. Tool calls run in the backend and are limited to explicitly registered functions.
+Restart FastAPI. Without these values, the rest of the app works and chat returns a clear “not configured” response. Tool calls run in the backend and are limited to explicitly registered functions.
+
+### On-demand screen awareness
+
+V.I.P.E.R. can inspect the active screen when a request involves the current app or browser tab, or when you directly ask it to read the screen. Direct screen-reading requests return the vision result rather than relying on the text chat model to decide whether it can see the screen. It takes a fresh screenshot of the display containing the active window before an app/tab action and checks the screen again afterward; it does not run a background watcher or save screenshots. The V.I.P.E.R. overlay is hidden briefly during capture so it does not obscure the screen.
+
+For desktop use, fully quit and relaunch with `Launch_VIPER.bat` after updating. Electron starts its own backend on a free local port and waits for its health check before opening the UI, avoiding accidentally connecting to an older backend already using port 8000.
+
+The default `SCREEN_VISION_MODEL` is a Groq image-capable model and uses the configured `LLM_API_KEY`. If using Ollama, set `SCREEN_VISION_MODEL` to an image-capable model installed locally. Screen images are sent to the configured vision provider for analysis; use a local vision model if screen content must stay on the device. Default blocked app and window-title exclusions are configurable with `SCREEN_BLOCKED_APPS` and `SCREEN_BLOCKED_KEYWORDS`.
 
 ## Run backend checks
 
@@ -74,6 +82,7 @@ backend/
   app/api/                  shared API router
   app/modules/auth/         registration, sign-in, and current account
   app/modules/assistant/    provider client, chat API, and tool registry
+  app/modules/screen_assistant/  on-demand desktop capture and vision analysis
   app/modules/health/       liveness and database readiness
   app/migrations/           Alembic database migrations
 frontend/

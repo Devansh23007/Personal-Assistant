@@ -16,8 +16,12 @@ class Settings(BaseSettings):
     llm_model: str = "openai/gpt-oss-120b"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "llama3.2:3b"
+    screen_vision_model: str = "qwen/qwen3.8-27b"
+    screen_blocked_keywords: str = "password,bank,incognito,private browsing,inprivate,paypal,upi,credit card,login,sign in,otp"
+    screen_blocked_apps: str = "1password,bitwarden,keepass,lastpass,whatsapp,telegram,signal,authenticator"
     whisper_model: str = "whisper-large-v3-turbo"
     preferred_browser: str = "Brave"
+    open_target_preference: str = "ask"
     tts_api_key: str = ""
     tts_base_url: str = "https://api.groq.com/openai/v1"
     tts_model: str = "canopylabs/orpheus-v1-english"
@@ -32,6 +36,8 @@ class Settings(BaseSettings):
     def validate_production_secret(self) -> "Settings":
         if self.app_env.lower() == "production" and len(self.app_secret_key) < 32:
             raise ValueError("APP_SECRET_KEY must be at least 32 characters in production")
+        if self.open_target_preference.lower() not in {"app", "web", "ask"}:
+            raise ValueError("OPEN_TARGET_PREFERENCE must be app, web, or ask")
         return self
 
 
